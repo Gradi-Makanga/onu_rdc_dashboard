@@ -1,0 +1,10 @@
+name: onu_rdc_dashboard2
+title:
+username: gradi
+account: gradi
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16211070
+bundleId: 11259634
+url: https://gradi.shinyapps.io/onu_rdc_dashboard2/
+version: 1

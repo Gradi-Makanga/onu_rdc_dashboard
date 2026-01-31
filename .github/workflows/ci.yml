@@ -1,0 +1,16 @@
+
+name: CI
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+      - name: Install deps
+        run: R -q -e 'install.packages(c("targets","httr2","jsonlite","rvest","xml2","DBI","RPostgres","arrow","dplyr","tidyr","ggplot2"))'
+      - name: Lint
+        run: echo "lint placeholder"

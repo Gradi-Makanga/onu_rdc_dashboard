@@ -1,0 +1,11 @@
+.env
+**/.env
+
+.Rhistory
+.RData
+.Rproj.user/
+**/.Rhistory
+**/.RData
+
+*.log
+*.tmp

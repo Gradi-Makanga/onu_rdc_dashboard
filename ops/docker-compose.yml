@@ -1,0 +1,17 @@
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: onu_rdc
+      POSTGRES_USER: onu_user
+      POSTGRES_PASSWORD: Onu_drc_12#
+    ports: ["5432:5432"]
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./../db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+  adminer:
+    image: adminer
+    ports: ["8081:8080"]
+volumes:
+  db_data:
