@@ -1,9 +1,11 @@
-setwd('D:/Documents/Poste_UN/Projet_Automatisation/onu_rdc_dashboard/ui')
+library(shiny)
 
-#for (p in c('shiny','httr2','readr','DT')) if (!requireNamespace(p, quietly = TRUE)) install.packages(p)
+# Railway fournit automatiquement le port
+port <- as.integer(Sys.getenv("PORT", "3838"))
 
-Sys.setenv(ONU_API_BASE = 'http://127.0.0.1:8000')
-Sys.setenv(API_KEY = '')
-
-shiny::runApp('app.R', host = '127.0.0.1', port = 8030, launch.browser = TRUE)
-
+# Lancer l'application Shiny
+runApp(
+  appDir = ".",
+  host = "0.0.0.0",
+  port = port
+)
