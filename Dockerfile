@@ -1,3 +1,6 @@
+ARG CACHE_BUST=1
+RUN echo "CACHE_BUST=$CACHE_BUST"
+
 FROM rocker/shiny:4.3.2
 
 # Dépendances système nécessaires (Leaflet + RPostgres + compilation)
