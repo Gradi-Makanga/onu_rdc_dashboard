@@ -1,2 +1,4 @@
-#!/bin/sh
-Rscript ui/run_shiny.R
+#!/bin/bash
+echo "Starting Shiny app..."
+cd ui
+Rscript run_shiny.R

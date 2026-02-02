@@ -678,3 +678,51 @@ The following objects are masked from 'package:base':
 Running plumber API at http://127.0.0.1:8000
 Running plumber API at http://127.0.0.1:8000
 Running swagger Docs at http://127.0.0.1:8000/__docs__/
+
+Attaching package: 'dplyr'
+
+The following objects are masked from 'package:stats':
+
+    filter, lag
+
+The following objects are masked from 'package:base':
+
+    intersect, setdiff, setequal, union
+
+[plumber] .env chargé depuis: D:\Documents\Poste_UN\Projet_Automatisation\onu_rdc_dashboard\.env
+Running plumber API at http://127.0.0.1:8000
+Running plumber API at http://127.0.0.1:8000
+Running swagger Docs at http://127.0.0.1:8000/__docs__/
+^C^C
+Attaching package: 'dplyr'
+
+The following objects are masked from 'package:stats':
+
+    filter, lag
+
+The following objects are masked from 'package:base':
+
+    intersect, setdiff, setequal, union
+
+[plumber] .env chargé depuis: D:\Documents\Poste_UN\Projet_Automatisation\onu_rdc_dashboard\.env
+Running plumber API at http://127.0.0.1:8000
+Running plumber API at http://127.0.0.1:8000
+Running swagger Docs at http://127.0.0.1:8000/__docs__/
+^C
+
+Execution halted
+
+Attaching package: 'dplyr'
+
+The following objects are masked from 'package:stats':
+
+    filter, lag
+
+The following objects are masked from 'package:base':
+
+    intersect, setdiff, setequal, union
+
+[plumber] .env chargé depuis: D:\Documents\Poste_UN\Projet_Automatisation\onu_rdc_dashboard\.env
+Running plumber API at http://127.0.0.1:8000
+Running plumber API at http://127.0.0.1:8000
+Running swagger Docs at http://127.0.0.1:8000/__docs__/
