@@ -1,26 +1,27 @@
-FROM rocker/r-ver:4.3.2
+FROM rocker/shiny:4.3.2
 
-# libs système souvent nécessaires à leaflet, sf, curl, ssl, etc.
+# Installer les dépendances système nécessaires (déjà optimisées)
 RUN apt-get update && apt-get install -y \
-  libcurl4-openssl-dev \
-  libssl-dev \
-  libxml2-dev \
-  libgit2-dev \
-  libfontconfig1-dev \
-  libharfbuzz-dev \
-  libfribidi-dev \
-  libfreetype6-dev \
-  libpng-dev \
-  libjpeg-dev \
-  libtiff5-dev \
-  && rm -rf /var/lib/apt/lists/*
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    libgdal-dev \
+    libgeos-dev \
+    libproj-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Installer les packages R nécessaires
-RUN R -e "install.packages(c('shiny','leaflet','DT','httr2','jsonlite','readr','dplyr','ggplot2','RPostgres','DBI','dotenv','sf'), repos='https://cloud.r-project.org')"
+# Installer les packages R (sf est déjà supporté par rocker)
+RUN R -e "install.packages(c( \
+  'shiny','httr2','jsonlite','readr','dplyr','ggplot2','leaflet', \
+  'DT','RPostgres','DBI','dotenv' \
+), repos='https://cloud.r-project.org')"
 
+# Copier le projet
 WORKDIR /app
 COPY . /app
 
-EXPOSE 8080
+# Exposer le port Railway
+EXPOSE 3838
 
-CMD ["bash", "start.sh"]
+# Lancer l'app Shiny
+CMD ["R", "-e", "shiny::runApp('ui', host='0.0.0.0', port=as.integer(Sys.getenv('PORT', 3838)))"]
