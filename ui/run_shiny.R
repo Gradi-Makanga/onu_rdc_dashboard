@@ -5,5 +5,5 @@ Sys.setenv(
   API_KEY = Sys.getenv("API_KEY", "")
 )
 
-shiny::runApp("ui", host = "0.0.0.0", port = as.integer(Sys.getenv("PORT", 8080)))
+shiny::runApp("ui", host = "0.0.0.0", port = as.integer(Sys.getenv("PORT", 3838)))
 
