@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
-echo "Starting Shiny app..."
+
+echo "Starting Shiny..."
 cd ui
-Rscript run_shiny.R
+R -e "shiny::runApp('.', host='0.0.0.0', port=as.integer(Sys.getenv('PORT', 3838)))"
