@@ -1,15 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
-echo "Working dir:"
-pwd
-echo "Listing root:"
-ls -la
+export PORT="${PORT:-8080}"
+export HOST="0.0.0.0"
 
-cd ui
-echo "Now in:"
-pwd
-echo "Listing ui:"
-ls -la
-
-R -e "shiny::runApp('.', host='0.0.0.0', port=as.integer(Sys.getenv('PORT', 3838)))"
+Rscript -e "shiny::runApp('ui', host=Sys.getenv('HOST','0.0.0.0'), port=as.integer(Sys.getenv('PORT','8080')))"

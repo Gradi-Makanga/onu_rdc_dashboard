@@ -1,22 +1,26 @@
-FROM rocker/shiny:4.3.2
+FROM rocker/r-ver:4.3.2
 
-# Installer quelques libs système souvent nécessaires
+# libs système souvent nécessaires à leaflet, sf, curl, ssl, etc.
 RUN apt-get update && apt-get install -y \
-    libcurl4-openssl-dev \
-    libssl-dev \
-    libxml2-dev \
-    && rm -rf /var/lib/apt/lists/*
+  libcurl4-openssl-dev \
+  libssl-dev \
+  libxml2-dev \
+  libgit2-dev \
+  libfontconfig1-dev \
+  libharfbuzz-dev \
+  libfribidi-dev \
+  libfreetype6-dev \
+  libpng-dev \
+  libjpeg-dev \
+  libtiff5-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+# Installer les packages R nécessaires
+RUN R -e "install.packages(c('shiny','leaflet','DT','httr2','jsonlite','readr','dplyr','ggplot2','RPostgres','DBI','dotenv','sf'), repos='https://cloud.r-project.org')"
 
 WORKDIR /app
-
-# Copier tout le projet
 COPY . /app
 
-# Installer les packages R nécessaires (à adapter si besoin)
-RUN R -e "install.packages(c('shiny','httr2','jsonlite','readr','dplyr','ggplot2','leaflet','DT','RPostgres','DBI','dotenv','sf'), repos='https://cloud.r-project.org')"
+EXPOSE 8080
 
-# Railway fournit le port via $PORT
-EXPOSE 3838
-
-# Lancer ton start.sh
 CMD ["bash", "start.sh"]
