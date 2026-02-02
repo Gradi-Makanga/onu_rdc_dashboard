@@ -13,7 +13,7 @@ WORKDIR /app
 COPY . /app
 
 # Installer les packages R nécessaires (à adapter si besoin)
-RUN R -e "install.packages(c('shiny','httr2','jsonlite','readr','dplyr','ggplot2','leaflet','DT','RPostgres','DBI','dotenv'), repos='https://cloud.r-project.org')"
+RUN R -e "install.packages(c('shiny','httr2','jsonlite','readr','dplyr','ggplot2','leaflet','DT','RPostgres','DBI','dotenv','leaflet'), repos='https://cloud.r-project.org')"
 
 # Railway fournit le port via $PORT
 EXPOSE 3838
