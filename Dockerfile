@@ -15,6 +15,8 @@ COPY . /app
 
 # Installer les packages R via CRAN
 RUN R -e "install.packages(c('shiny','httr2','jsonlite','readr','dplyr','ggplot2','leaflet','DT','RPostgres','DBI','dotenv','sf'), repos='https://cloud.r-project.org')"
+RUN R -e "cat('LIB=', .libPaths(), '\n'); cat('leaflet installed? ', requireNamespace('leaflet', quietly=TRUE), '\n')"
+RUN R -e "if (!requireNamespace('leaflet', quietly=TRUE)) quit(status=1)"
 
 EXPOSE 3838
 
