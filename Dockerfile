@@ -1,26 +1,23 @@
-# Image R stable 
-FROM rocker/r-ver:4.5.1
+# Image R avec binaries CRAN (stringi OK)
+FROM rocker/r2u:4.5.1
 
-# Librairies système nécessaires (SSL, CURL, Postgres, etc.)
+# Installer dépendances système légères
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libssl-dev \
-    libcurl4-openssl-dev \
-    libxml2-dev \
     libpq-dev \
-    libicu-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# (Option très utile) repo binaries Posit pour éviter compilation
-ENV RSPM="https://packagemanager.posit.co/cran/__linux__/bookworm/latest"
+# Installer les packages R (binaries ultra rapides)
+RUN install.r \
+    plumber \
+    DBI \
+    RPostgres \
+    jsonlite \
+    httr2 \
+    dplyr \
+    readr \
+    dotenv
 
-# Installer les packages R nécessaires à l'API
-RUN R -e "options(repos=c(CRAN='https://cloud.r-project.org')); \
-          install.packages('stringi', type='source'); \
-          install.packages(c('plumber','DBI','RPostgres','jsonlite','dotenv','readr','dplyr','httr2'), dependencies=TRUE)"
-
-
-# Copier le code du repo 
+# Copier le code
 WORKDIR /app
 COPY . /app
 
