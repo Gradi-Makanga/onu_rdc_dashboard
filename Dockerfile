@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4-openssl-dev \
     libxml2-dev \
     libpq-dev \
+    libicu-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # (Option très utile) repo binaries Posit pour éviter compilation
