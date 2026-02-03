@@ -1,47 +1,26 @@
-# Base R + Shiny
-FROM rocker/shiny:4.3.2
+# Image R stable 
+FROM rocker/r-ver:4.5.1
 
-# --- System deps for sf / terra / units / s2 / leaflet + RPostgres ---
+# Librairies système nécessaires (SSL, CURL, Postgres, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # build tools
-    build-essential g++ make cmake pkg-config \
-    # geospatial stack for sf/terra
-    gdal-bin libgdal-dev \
-    libgeos-dev libproj-dev proj-data proj-bin \
-    # units dependency
-    libudunits2-dev \
-    # common deps
-    libssl-dev libcurl4-openssl-dev libxml2-dev \
-    # postgres client headers for RPostgres
+    libssl-dev \
+    libcurl4-openssl-dev \
+    libxml2-dev \
     libpq-dev \
-    # (optional but useful)
-    git \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
-# Force R to use site-library (stable inside rocker images)
-ENV R_LIBS_SITE=/usr/local/lib/R/site-library
+# (Option très utile) repo binaries Posit pour éviter compilation
+ENV RSPM="https://packagemanager.posit.co/cran/__linux__/bookworm/latest"
 
-# --- Install R packages ---
-RUN R -e "options(repos=c(CRAN='https://cloud.r-project.org'), Ncpus=2); \
-          .libPaths(Sys.getenv('R_LIBS_SITE')); \
-          install.packages(c('shiny','httr2','jsonlite','readr','dplyr','ggplot2','DT','DBI','dotenv','RPostgres'), dependencies=TRUE); \
-          install.packages('leaflet', dependencies=TRUE); \
-          cat('LIBPATHS=', paste(.libPaths(), collapse=' | '), '\n'); \
-          cat('leaflet installed? ', requireNamespace('leaflet', quietly=TRUE), '\n'); \
-          cat('RPostgres installed? ', requireNamespace('RPostgres', quietly=TRUE), '\n'); \
-          if(!requireNamespace('leaflet', quietly=TRUE)) quit(status=1)"
+# Installer les packages R nécessaires à l'API
+RUN R -e "options(repos=c(CRAN=Sys.getenv('RSPM'))); install.packages(c('plumber','DBI','RPostgres','jsonlite','dotenv','readr','dplyr','httr2'))"
 
-# --- Copy Shiny app ---
-# Ton app est dans onu_rdc_dashboard/ui
-WORKDIR /srv/shiny-server/onu_rdc_dashboard
-COPY ui/ ./ui/
+# Copier le code du repo
+WORKDIR /app
+COPY . /app
 
-# Shiny Server cherche une app dans /srv/shiny-server/<app>/ (app.R ou server.R/ui.R)
-# Si ton fichier s'appelle app.R dans ui/, on pointe directement dessus
-WORKDIR /srv/shiny-server/onu_rdc_dashboard/ui
+# Port Railway
+EXPOSE 8080
 
-# Expose Shiny port
-EXPOSE 3838
-
-# Run shiny-server
-CMD ["/usr/bin/shiny-server"]
+# Lancer l'API
+CMD ["R","-e","pr <- plumber::plumb('api/plumber.R'); pr$run(host='0.0.0.0', port=as.integer(Sys.getenv('PORT', 8080)))"]
