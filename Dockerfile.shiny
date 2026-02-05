@@ -1,10 +1,7 @@
-# --- Stage 1: récupérer shiny-server depuis l'image rocker/shiny ---
-FROM rocker/shiny:4.5.2 AS shinybase
-
-# --- Stage 2: r2u pour installer vite les packages R ---
 FROM rocker/r2u:jammy
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Dépendances système
+RUN apt-get update && apt-get install -y --no-install-recommends \ 
     libcurl4-openssl-dev \
     libssl-dev \
     libxml2-dev \
@@ -15,12 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copier shiny-server (binaire + config de base) depuis rocker/shiny
-COPY --from=shinybase /usr/bin/shiny-server /usr/bin/shiny-server
-COPY --from=shinybase /etc/shiny-server /etc/shiny-server
-COPY --from=shinybase /opt/shiny-server /opt/shiny-server
-
-# Installer les packages R rapidement (binaries)
+# Packages R (binaries rapides)
 RUN install.r \
     shiny \
     httr2 \
@@ -35,19 +27,9 @@ RUN install.r \
     RPostgres \
     dotenv
 
-WORKDIR /srv/shiny-server
-COPY ui /srv/shiny-server/app
-
-RUN printf '%s\n' \
- 'run_as shiny;' \
- 'server {' \
- '  listen ${PORT};' \
- '  location / {' \
- '    app_dir /srv/shiny-server/app;' \
- '    log_dir /var/log/shiny-server;' \
- '    directory_index on;' \
- '  }' \
- '}' > /etc/shiny-server/shiny-server.conf
+WORKDIR /app
+COPY ui /app
 
 EXPOSE 3838
-CMD ["/usr/bin/shiny-server"]
+
+CMD ["R","-e","shiny::runApp('/app', host='0.0.0.0', port=as.integer(Sys.getenv('PORT', 3838)))"]
