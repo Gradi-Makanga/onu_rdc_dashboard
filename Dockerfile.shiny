@@ -41,7 +41,7 @@ COPY ui /srv/shiny-server/app
 RUN printf '%s\n' \
  'run_as shiny;' \
  'server {' \
- '  listen 3838;' \
+ '  listen ${PORT};' \
  '  location / {' \
  '    app_dir /srv/shiny-server/app;' \
  '    log_dir /var/log/shiny-server;' \
