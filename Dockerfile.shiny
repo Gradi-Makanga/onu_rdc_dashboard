@@ -1,8 +1,11 @@
+# --- Stage 1: récupérer shiny-server depuis l'image rocker/shiny ---
+FROM rocker/shiny:4.5.2 AS shinybase
+
+# --- Stage 2: r2u pour installer vite les packages R ---
 FROM rocker/r2u:jammy
 
-# Installer shiny-server + libs système
+# Dépendances système (pas shiny-server ici)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    shiny-server \
     libcurl4-openssl-dev \
     libssl-dev \
     libxml2-dev \
@@ -13,7 +16,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Installer les packages R en BINAIRES (rapide)
+# Copier shiny-server (binaire + config de base) depuis rocker/shiny
+COPY --from=shinybase /usr/bin/shiny-server /usr/bin/shiny-server
+COPY --from=shinybase /etc/shiny-server /etc/shiny-server
+COPY --from=shinybase /opt/shiny-server /opt/shiny-server
+COPY --from=shinybase /usr/lib/R/site-library/shiny /usr/lib/R/site-library/shiny
+
+# Installer les packages R rapidement (binaries)
 RUN install.r \
     shiny \
     httr2 \
@@ -24,8 +33,8 @@ RUN install.r \
     ggplot2 \
     readr \
     DBI \
-    sf \
     RPostgres \
+    sf \
     dotenv
 
 # Copier l'app
