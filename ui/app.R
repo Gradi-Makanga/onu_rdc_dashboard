@@ -9,7 +9,7 @@ suppressPackageStartupMessages({
   library(htmltools)
 })
 
-API_BASE <- Sys.getenv("ONU_API_BASE", "http://127.0.0.1:8000")
+API_BASE <- Sys.getenv("ONU_API_BASE", "https://onurdcdashboard-production-4f33.up.railway.app")
 API_KEY  <- Sys.getenv("API_KEY", "")
 
 # ---------- Helpers encodage / utilitaires ----------
