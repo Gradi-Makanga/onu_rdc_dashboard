@@ -24,6 +24,7 @@ RUN install.r \
     readr \
     DBI \
     sf \
+    plotly \
     RPostgres \
     dotenv
 
