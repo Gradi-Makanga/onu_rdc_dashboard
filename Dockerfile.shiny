@@ -6,21 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN R -e "install.packages(c(
-  'shiny',
-  'httr2',
-  'jsonlite',
-  'dplyr',
-  'DT',
-  'leaflet',
-  'ggplot2',
-  'readr'
-), repos='https://cloud.r-project.org')"
+RUN R -e "install.packages(c('shiny','httr2','jsonlite','dplyr','DT','leaflet','ggplot2','readr','DBI','RPostgres','dotenv'), repos='https://cloud.r-project.org')"
 
 WORKDIR /srv/shiny-server
-
 COPY ui /srv/shiny-server/app
 
 EXPOSE 3838
-
 CMD ["/usr/bin/shiny-server"]
