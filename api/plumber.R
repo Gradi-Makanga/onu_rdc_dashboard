@@ -47,8 +47,10 @@ parse_database_url <- function(url){
 
   user <- u$username
   pass <- u$password
-  if (!is.na(user) && nzchar(user)) user <- httr2::url_decode(user)
-  if (!is.na(pass) && nzchar(pass)) pass <- httr2::url_decode(pass)
+
+  # Décodage robuste (URL-encoded) sans dépendre de httr2::url_decode()
+  if (!is.na(user) && nzchar(user)) user <- utils::URLdecode(user)
+  if (!is.na(pass) && nzchar(pass)) pass <- utils::URLdecode(pass)
 
   dbname <- u$path
   dbname <- sub("^/", "", dbname)
