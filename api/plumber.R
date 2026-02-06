@@ -1,18 +1,19 @@
-# api/plumber.R 
+# api/plumber.R  ---- FINAL (robust JSON errors + robust DATABASE_URL parsing)
+
 suppressPackageStartupMessages({
   library(plumber)
   library(DBI)
   library(RPostgres)
   library(dplyr)
   library(glue)
-  library(httr2)   # <- parsing robuste de DATABASE_URL
-  library(dotenv)  # <- charge .env en local si présent
+  library(httr2)   # url_parse()
+  library(dotenv)  # optional local .env
 })
 
 `%||%` <- function(x, y) if (is.null(x) || is.na(x) || identical(x, "")) y else x
 
 # ------------------------------------------------------------------------------
-# 1) Charger .env en LOCAL uniquement (en prod Railway, souvent absent => OK)
+# 1) Load .env locally if present (safe in production if absent)
 # ------------------------------------------------------------------------------
 find_env <- function(){
   candidates <- c(
@@ -28,13 +29,13 @@ find_env <- function(){
 .env.path <- find_env()
 if (!is.na(.env.path)) {
   dotenv::load_dot_env(.env.path)
-  message("[plumber] .env chargé depuis: ", .env.path)
+  message("[plumber] .env loaded from: ", .env.path)
 } else {
-  message("[plumber] Aucun .env trouvé (OK en production).")
+  message("[plumber] No .env found (OK in production).")
 }
 
 # ------------------------------------------------------------------------------
-# 2) Connexion Postgres (Railway-first) via DATABASE_URL robuste
+# 2) Robust DATABASE_URL parsing (handles special chars in password)
 # ------------------------------------------------------------------------------
 parse_database_url <- function(url){
   if (!nzchar(url)) stop("DATABASE_URL is empty")
@@ -48,7 +49,7 @@ parse_database_url <- function(url){
   user <- u$username
   pass <- u$password
 
-  # Décodage robuste (URL-encoded) sans dépendre de httr2::url_decode()
+  # Decode URL-encoded user/pass safely (does NOT depend on httr2::url_decode)
   if (!is.na(user) && nzchar(user)) user <- utils::URLdecode(user)
   if (!is.na(pass) && nzchar(pass)) pass <- utils::URLdecode(pass)
 
@@ -74,7 +75,7 @@ get_db_con <- function(){
     ))
   }
 
-  # fallback (utile en local si tu préfères PG* au lieu de DATABASE_URL)
+  # fallback (local)
   DBI::dbConnect(
     RPostgres::Postgres(),
     host     = Sys.getenv("PGHOST"),
@@ -86,27 +87,24 @@ get_db_con <- function(){
   )
 }
 
-# ------------------------------------------------------------------------------
-# 3) API KEY (optionnel) : si API_KEY vide -> pas de protection
-# ------------------------------------------------------------------------------
-#* @filter apikey
-function(req, res){
-  allowed <- Sys.getenv("API_KEY", unset = "")
-  got     <- req$HTTP_X_API_KEY %||% ""
-  if (identical(allowed, "") || identical(allowed, got)) {
-    forward()
-  } else {
-    res$status <- 401
-    return(list(error = "Unauthorized: invalid API key"))
-  }
-}
+pg_schema <- function() Sys.getenv("PGSCHEMA", "public")
 
 # ------------------------------------------------------------------------------
-# 4) CORS (optionnel) : CORS_ALLOW_ORIGIN="*" ou liste séparée par virgules
+# 3) Global plumber config: CORS + JSON error handler (prevents "An exception occurred.")
 # ------------------------------------------------------------------------------
 #* @plumber
 function(pr){
+
+  # ---- Force JSON errors everywhere (Swagger will show the real message)
+  pr$setErrorHandler(function(req, res, err){
+    res$status <- 500
+    res$setHeader("Content-Type", "application/json; charset=utf-8")
+    list(ok = FALSE, error = as.character(err))
+  })
+
+  # ---- CORS (optional). Set CORS_ALLOW_ORIGIN="*" or "https://xxx,https://yyy"
   origins <- strsplit(Sys.getenv("CORS_ALLOW_ORIGIN", "*"), ",")[[1]] |> trimws()
+
   pr$registerHooks(list(
     preroute = function(req, res){
       origin <- req$HTTP_ORIGIN %||% "*"
@@ -116,43 +114,56 @@ function(pr){
       res$setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
     }
   ))
+
   pr
 }
 
 # ------------------------------------------------------------------------------
-# 5) Helpers
+# 4) Optional API key filter (if API_KEY empty => no protection)
 # ------------------------------------------------------------------------------
-pg_schema <- function() Sys.getenv("PGSCHEMA", "public")
+#* @filter apikey
+function(req, res){
+  allowed <- Sys.getenv("API_KEY", unset = "")
+  got     <- req$HTTP_X_API_KEY %||% ""
+  if (identical(allowed, "") || identical(allowed, got)) {
+    forward()
+  } else {
+    res$status <- 401
+    return(list(ok = FALSE, error = "Unauthorized: invalid API key"))
+  }
+}
 
 # ------------------------------------------------------------------------------
-# 6) Endpoints
+# 5) Routes
 # ------------------------------------------------------------------------------
 #* @get /health
+#* @serializer unboxedJSON
 function(){
-  list(status = "ok", time = as.character(Sys.time()))
+  list(ok = TRUE, status = "ok", time = as.character(Sys.time()))
 }
 
 #* @get /debug/env
+#* @serializer unboxedJSON
 function(){
   list(
-    DATABASE_URL_set    = nzchar(Sys.getenv("DATABASE_URL")),
-    PGHOST              = Sys.getenv("PGHOST"),
-    PGPORT              = Sys.getenv("PGPORT"),
-    PGDATABASE          = Sys.getenv("PGDATABASE"),
-    PGUSER              = Sys.getenv("PGUSER"),
-    PGPASSWORD_set      = nzchar(Sys.getenv("PGPASSWORD")),
-    PGREADUSER          = Sys.getenv("PGREADUSER"),
-    PGREADPASS_set      = nzchar(Sys.getenv("PGREADPASS")),
-    PGSSLMODE           = Sys.getenv("PGSSLMODE", "require"),
-    PGSCHEMA            = Sys.getenv("PGSCHEMA", "public"),
-    env_file_loaded     = ifelse(is.na(.env.path), NA_character_, .env.path)
+    DATABASE_URL_set = nzchar(Sys.getenv("DATABASE_URL")),
+    PGHOST           = Sys.getenv("PGHOST"),
+    PGPORT           = Sys.getenv("PGPORT"),
+    PGDATABASE       = Sys.getenv("PGDATABASE"),
+    PGUSER           = Sys.getenv("PGUSER"),
+    PGPASSWORD_set   = nzchar(Sys.getenv("PGPASSWORD")),
+    PGREADUSER       = Sys.getenv("PGREADUSER"),
+    PGREADPASS_set   = nzchar(Sys.getenv("PGREADPASS")),
+    PGSSLMODE        = Sys.getenv("PGSSLMODE", "require"),
+    PGSCHEMA         = Sys.getenv("PGSCHEMA", "public"),
+    env_file_loaded  = ifelse(is.na(.env.path), NA_character_, .env.path)
   )
 }
 
-#* @serializer unboxedJSON
 #* @get /debug/pingdb
+#* @serializer unboxedJSON
 function(res){
-  out <- tryCatch({
+  tryCatch({
     con <- get_db_con()
     on.exit(DBI::dbDisconnect(con), add = TRUE)
 
@@ -170,18 +181,16 @@ function(res){
     res$status <- 500
     list(ok = FALSE, error = conditionMessage(e))
   })
-
-  out
 }
 
 # ------------------------------------------------------------------------------
-# IMPORTANT:
-# Les requêtes ci-dessous supposent une table: indicator_values
-# Colonnes attendues (adaptables): indicator_code, indicator_name, ref_area, period, value,
-# obs_status, source, inserted_at, updated_at
+# 6) Data endpoints (adapt if your table name differs)
+# Assumes table: indicator_values in schema PGSCHEMA (default public)
+# Columns used: indicator_code, indicator_name, ref_area, period, value, obs_status, source, inserted_at, updated_at
 # ------------------------------------------------------------------------------
 
 #* @get /indicators
+#* @serializer unboxedJSON
 function(q = ""){
   con <- get_db_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
   schema <- pg_schema()
@@ -206,8 +215,8 @@ function(q = ""){
   DBI::dbGetQuery(con, qry)
 }
 
-#* @serializer unboxedJSON
 #* @get /values
+#* @serializer unboxedJSON
 function(indicator_code = "", ref_area = "", start = NA, end = NA, limit = 1000, offset = 0){
   con <- get_db_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
   schema <- pg_schema()
@@ -240,11 +249,11 @@ function(indicator_code = "", ref_area = "", start = NA, end = NA, limit = 1000,
     LIMIT {limit} OFFSET {offset};
   '))
 
-  list(total = total, limit = limit, offset = offset, rows = rows)
+  list(ok = TRUE, total = total, limit = limit, offset = offset, rows = rows)
 }
 
-#* @serializer csv
 #* @get /export/csv
+#* @serializer csv
 function(indicator_code = "", ref_area = "", start = NA, end = NA){
   con <- get_db_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
   schema <- pg_schema()
@@ -269,14 +278,17 @@ function(indicator_code = "", ref_area = "", start = NA, end = NA){
   DBI::dbGetQuery(con, qry)
 }
 
-#* @serializer html
 #* @get /metrics
+#* @serializer html
 function(){
   con <- get_db_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
   schema <- pg_schema()
 
   n <- DBI::dbGetQuery(con, glue('SELECT COUNT(*)::bigint AS n FROM "{schema}"."indicator_values";'))$n[1]
-  latest <- DBI::dbGetQuery(con, glue('SELECT max(inserted_at) AS max_ins, max(updated_at) AS max_upd FROM "{schema}"."indicator_values";'))
+  latest <- DBI::dbGetQuery(con, glue('
+    SELECT max(inserted_at) AS max_ins, max(updated_at) AS max_upd
+    FROM "{schema}"."indicator_values";
+  '))
 
   max_ins <- latest$max_ins[[1]]
   max_upd <- latest$max_upd[[1]]
@@ -286,4 +298,4 @@ function(){
     "onu_api_last_inserted_at ", if (!is.null(max_ins) && !is.na(max_ins)) as.numeric(as.POSIXct(max_ins)) else "NaN", "\n",
     "onu_api_last_updated_at ",  if (!is.null(max_upd) && !is.na(max_upd)) as.numeric(as.POSIXct(max_upd)) else "NaN", "\n"
   )
-}
+} 
