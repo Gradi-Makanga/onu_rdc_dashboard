@@ -149,13 +149,14 @@ function(){
   )
 }
 
+#* @serializer unboxedJSON
 #* @get /debug/pingdb
-function(){
-  tryCatch({
+function(res){
+  out <- tryCatch({
     con <- get_db_con()
     on.exit(DBI::dbDisconnect(con), add = TRUE)
 
-    DBI::dbGetQuery(con, "
+    info <- DBI::dbGetQuery(con, "
       SELECT current_database() AS db,
              current_user AS user,
              current_schema() AS schema,
@@ -163,9 +164,14 @@ function(){
              inet_server_port() AS server_port,
              version();
     ")
+
+    list(ok = TRUE, info = info)
   }, error = function(e){
-    list(error = TRUE, message = conditionMessage(e))
+    res$status <- 500
+    list(ok = FALSE, error = conditionMessage(e))
   })
+
+  out
 }
 
 # ------------------------------------------------------------------------------
