@@ -9,143 +9,203 @@ suppressPackageStartupMessages({
   library(dotenv)
 })
 
-# =========================
-# Chargement .env (Railway / local)
-# =========================
-find_env <- function(){
-  p <- c(
+`%||%` <- function(x, y) if (is.null(x) || is.na(x) || identical(x, "")) y else x
+
+# --- Charger .env si présent (NE PAS planter en prod Railway) ---
+find_env <- function() {
+  cands <- c(
+    # cas Railway
+    "/app/.env",
+    "/app/api/.env",
+    # cas projet local (racine puis api/)
     file.path(getwd(), ".env"),
     file.path(getwd(), "..", ".env"),
-    file.path(dirname(getwd()), ".env")
+    file.path(dirname(getwd()), ".env"),
+    # fallback: dossier du fichier courant si possible
+    file.path("..", ".env")
   )
-  p[file.exists(p)][1] %||% NA_character_
+  cands <- unique(normalizePath(cands, winslash = "/", mustWork = FALSE))
+  for (p in cands) if (!is.na(p) && nzchar(p) && file.exists(p)) return(p)
+  NA_character_
 }
-
-`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || is.na(x)) y else x
 
 .env.path <- find_env()
 if (!is.na(.env.path)) {
-  dotenv::load_dot_env(.env.path)
+  dotenv::load_dot_env(.env.path)   # (pas d'argument override pour certaines versions)
   message("[plumber] .env chargé depuis: ", .env.path)
 } else {
-  message("[plumber] aucun .env trouvé (variables Railway utilisées)")
+  message("[plumber] Aucun .env trouvé (OK si variables Railway déjà définies).")
 }
 
-# =========================
-# Connexion PostgreSQL
-# =========================
+# --- Connexion PG : préfère DATABASE_URL si dispo, sinon variables PG* ---
 pg_con <- function() {
+  db_url <- Sys.getenv("DATABASE_URL", unset = "")
+  if (nzchar(db_url)) {
+    # ex: postgres://user:pass@host:port/dbname?sslmode=require
+    if (!requireNamespace("httr2", quietly = TRUE)) {
+      install.packages("httr2", repos = "https://cloud.r-project.org")
+    }
+    u <- httr2::url_parse(db_url)
+    q <- u$query %||% list()
+
+    return(DBI::dbConnect(
+      RPostgres::Postgres(),
+      host     = u$hostname %||% Sys.getenv("PGHOST", unset = ""),
+      port     = as.integer(u$port %||% Sys.getenv("PGPORT", "5432")),
+      dbname   = sub("^/+", "", u$path %||% Sys.getenv("PGDATABASE", unset = "")),
+      user     = u$username %||% Sys.getenv("PGUSER", Sys.getenv("PGREADUSER", "")),
+      password = u$password %||% Sys.getenv("PGPASSWORD", Sys.getenv("PGREADPASS", "")),
+      sslmode  = q$sslmode %||% Sys.getenv("PGSSLMODE", "prefer")
+    ))
+  }
+
   DBI::dbConnect(
     RPostgres::Postgres(),
-    host     = Sys.getenv("PGHOST"),
+    host     = Sys.getenv("PGHOST", unset = ""),
     port     = as.integer(Sys.getenv("PGPORT", "5432")),
-    dbname   = Sys.getenv("PGDATABASE"),
-    user     = Sys.getenv("PGUSER"),
-    password = Sys.getenv("PGPASSWORD"),
-    sslmode  = Sys.getenv("PGSSLMODE", "require")
+    dbname   = Sys.getenv("PGDATABASE", unset = ""),
+    user     = Sys.getenv("PGUSER", Sys.getenv("PGREADUSER", "")),
+    password = Sys.getenv("PGPASSWORD", Sys.getenv("PGREADPASS", "")),
+    sslmode  = Sys.getenv("PGSSLMODE", "prefer")
   )
 }
 
-# =========================
-# API KEY (optionnelle)
-# =========================
-#* @filter apikey
-function(req, res){
-  key_expected <- Sys.getenv("API_KEY", "")
-  key_got <- req$HTTP_X_API_KEY %||% ""
+# --- Rendre le résultat JSON-safe (évite pq_inet / POSIXct qui cassent swagger) ---
+json_safe_df <- function(x) {
+  if (!is.data.frame(x)) return(x)
+  for (nm in names(x)) {
+    col <- x[[nm]]
+    if (inherits(col, c("POSIXct", "POSIXt", "Date"))) {
+      x[[nm]] <- as.character(col)
+    } else if (inherits(col, "pq_inet")) {
+      x[[nm]] <- as.character(col)
+    } else if (is.list(col)) {
+      x[[nm]] <- vapply(col, function(z) paste0(z, collapse = ","), character(1))
+    }
+  }
+  x
+}
 
-  if (key_expected == "" || identical(key_expected, key_got)) {
+# ---- API Key (désactivée si API_KEY vide) ----
+#* @filter apikey
+function(req, res) {
+  allowed <- Sys.getenv("API_KEY", unset = "")
+  got     <- req$HTTP_X_API_KEY %||% ""
+
+  if (identical(allowed, "") || identical(allowed, got)) {
     forward()
   } else {
-    res$status <- 401
-    list(error = TRUE, message = "Invalid API key")
+    res$setStatus(401L)
+    return(list(error = TRUE, message = "Unauthorized: invalid API key"))
   }
 }
 
-# =========================
-# CORS
-# =========================
+# ---- CORS ----
 #* @plumber
-function(pr){
+function(pr) {
+  origins <- strsplit(Sys.getenv("CORS_ALLOW_ORIGIN", "*"), ",")[[1]] |> trimws()
+
   pr$registerHooks(list(
-    preroute = function(req, res){
-      res$setHeader("Access-Control-Allow-Origin", "*")
+    preroute = function(req, res) {
+      origin <- req$HTTP_ORIGIN %||% "*"
+      allow  <- if ("*" %in% origins || origin %in% origins) origin else "null"
+      res$setHeader("Access-Control-Allow-Origin", allow)
       res$setHeader("Access-Control-Allow-Methods", "GET, OPTIONS")
       res$setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+      res
     }
   ))
   pr
 }
 
-# =========================
-# Health
-# =========================
+# ---- Health ----
 #* @get /health
-function(){
-  list(ok = TRUE, time = as.character(Sys.time()))
+#* @serializer unboxedJSON
+function() {
+  list(status = "ok", time = as.character(Sys.time()))
 }
 
-# =========================
-# Debug env
-# =========================
+# ---- Debug env (sans exposer les mots de passe) ----
 #* @get /debug/env
-function(){
+#* @serializer unboxedJSON
+function() {
   list(
     PGHOST = Sys.getenv("PGHOST"),
     PGPORT = Sys.getenv("PGPORT"),
     PGDATABASE = Sys.getenv("PGDATABASE"),
     PGUSER = Sys.getenv("PGUSER"),
-    PGSSLMODE = Sys.getenv("PGSSLMODE")
+    PGREADUSER = Sys.getenv("PGREADUSER"),
+    PGPASSWORD_set = nzchar(Sys.getenv("PGPASSWORD")),
+    PGREADPASS_set = nzchar(Sys.getenv("PGREADPASS")),
+    PGSSLMODE = Sys.getenv("PGSSLMODE"),
+    DATABASE_URL_set = nzchar(Sys.getenv("DATABASE_URL")),
+    CORS_ALLOW_ORIGIN = Sys.getenv("CORS_ALLOW_ORIGIN")
   )
 }
 
-# =========================
-# Debug ping DB (SAFE JSON)
-# =========================
+# ---- Debug ping DB (DOIT tourner) ----
 #* @get /debug/pingdb
-function(){
+#* @serializer unboxedJSON
+function() {
+  # On renvoie un objet clair même en cas d'erreur, pour diagnostiquer Railway
+  cfg <- list(
+    host   = Sys.getenv("PGHOST", "postgres.railway.internal"),
+    port   = as.integer(Sys.getenv("PGPORT", "5432")),
+    dbname = Sys.getenv("PGDATABASE", ""),
+    user   = Sys.getenv("PGUSER", Sys.getenv("PGREADUSER", ""))
+  )
+
   tryCatch({
     con <- pg_con()
-    on.exit(dbDisconnect(con), add = TRUE)
+    on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
 
-    r <- dbGetQuery(con, "
+    out <- DBI::dbGetQuery(con, "
       SELECT
         current_database() AS db,
-        current_user AS usr,
-        current_schema() AS schema,
-        inet_server_addr()::text AS server_addr,
+        current_user       AS usr,
+        current_schema()   AS schema,
+        inet_server_addr() AS server_addr,
         inet_server_port() AS server_port,
-        version()
+        version()          AS version
     ")
+    out <- json_safe_df(out)
 
-    list(
-      ok = TRUE,
-      config = list(
-        host   = Sys.getenv("PGHOST"),
-        port   = as.integer(Sys.getenv("PGPORT", "5432")),
-        dbname = Sys.getenv("PGDATABASE"),
-        user   = Sys.getenv("PGUSER")
-      ),
-      result = r
-    )
-  }, error = function(e){
-    list(
-      ok = FALSE,
-      error = TRUE,
-      message = conditionMessage(e)
-    )
+    list(ok = TRUE, config = cfg, result = out)
+  }, error = function(e) {
+    list(ok = FALSE, config = cfg, error = TRUE, message = conditionMessage(e))
   })
 }
 
-# =========================
-# Liste des indicateurs
-# =========================
-#* @get /indicators
-function(q = ""){
-  con <- pg_con(); on.exit(dbDisconnect(con), add = TRUE)
+# ---- Export CSV ----
+#* @serializer csv
+#* @get /export/csv
+function(indicator_code = "", ref_area = "", start = NA, end = NA) {
+  con <- pg_con(); on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
   schema <- Sys.getenv("PGSCHEMA", "public")
 
-  sql <- glue('
+  qry <- glue('
+    SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source, inserted_at, updated_at
+    FROM "{schema}"."indicator_values"
+    WHERE 1=1
+  ')
+
+  if (nzchar(indicator_code)) qry <- paste0(qry, glue(' AND indicator_code = {DBI::dbQuoteString(con, indicator_code)}'))
+  if (nzchar(ref_area))       qry <- paste0(qry, glue(' AND ref_area = {DBI::dbQuoteString(con, ref_area)}'))
+  if (!is.na(suppressWarnings(as.numeric(start)))) qry <- paste0(qry, glue(' AND period >= {as.numeric(start)}'))
+  if (!is.na(suppressWarnings(as.numeric(end))))   qry <- paste0(qry, glue(' AND period <= {as.numeric(end)}'))
+
+  qry <- paste0(qry, " ORDER BY indicator_code, ref_area, period;")
+  DBI::dbGetQuery(con, qry)
+}
+
+# ---- Liste indicateurs ----
+#* @get /indicators
+#* @serializer unboxedJSON
+function(q = "") {
+  con <- pg_con(); on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
+  schema <- Sys.getenv("PGSCHEMA", "public")
+
+  qry <- glue('
     SELECT DISTINCT indicator_code, indicator_name
     FROM "{schema}"."indicator_values"
     WHERE indicator_code IS NOT NULL
@@ -153,127 +213,84 @@ function(q = ""){
 
   if (nzchar(q)) {
     like <- paste0("%", gsub("%", "", q), "%")
-    sql <- paste0(sql, glue(
-      ' AND (indicator_code ILIKE {dbQuoteString(con, like)}
-             OR indicator_name ILIKE {dbQuoteString(con, like)})'
-    ))
+    qry <- paste0(qry, glue(' AND (indicator_code ILIKE {DBI::dbQuoteString(con, like)}
+                          OR indicator_name ILIKE {DBI::dbQuoteString(con, like)})'))
   }
 
-  sql <- paste0(sql, " ORDER BY indicator_code;")
-  dbGetQuery(con, sql)
+  qry <- paste0(qry, " ORDER BY indicator_code;")
+  json_safe_df(DBI::dbGetQuery(con, qry))
 }
 
-# =========================
-# Valeurs (JSON paginé)
-# =========================
+# ---- JSON paginé ----
 #* @serializer unboxedJSON
 #* @get /values
-function(indicator_code = "", ref_area = "", start = NA, end = NA,
-         limit = 1000, offset = 0){
-
-  con <- pg_con(); on.exit(dbDisconnect(con), add = TRUE)
+function(indicator_code = "", ref_area = "", start = NA, end = NA, limit = 1000, offset = 0) {
+  con <- pg_con(); on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
   schema <- Sys.getenv("PGSCHEMA", "public")
-
   limit  <- max(1, min(as.integer(limit), 10000))
   offset <- max(0, as.integer(offset))
 
   where <- "WHERE 1=1"
-  if (nzchar(indicator_code))
-    where <- paste0(where, glue(' AND indicator_code = {dbQuoteString(con, indicator_code)}'))
-  if (nzchar(ref_area))
-    where <- paste0(where, glue(' AND ref_area = {dbQuoteString(con, ref_area)}'))
-  if (!is.na(as.numeric(start)))
-    where <- paste0(where, glue(' AND period >= {as.numeric(start)}'))
-  if (!is.na(as.numeric(end)))
-    where <- paste0(where, glue(' AND period <= {as.numeric(end)}'))
+  if (nzchar(indicator_code)) where <- paste0(where, glue(' AND indicator_code = {DBI::dbQuoteString(con, indicator_code)}'))
+  if (nzchar(ref_area))       where <- paste0(where, glue(' AND ref_area = {DBI::dbQuoteString(con, ref_area)}'))
+  if (!is.na(suppressWarnings(as.numeric(start)))) where <- paste0(where, glue(' AND period >= {as.numeric(start)}'))
+  if (!is.na(suppressWarnings(as.numeric(end))))   where <- paste0(where, glue(' AND period <= {as.numeric(end)}'))
 
-  total <- dbGetQuery(con, glue(
-    'SELECT COUNT(*)::int AS n FROM "{schema}"."indicator_values" {where}'
-  ))$n[1]
+  total <- DBI::dbGetQuery(con, glue('SELECT COUNT(*)::int AS n FROM "{schema}"."indicator_values" {where};'))$n[1]
 
-  rows <- dbGetQuery(con, glue(
-    '
-    SELECT indicator_code, indicator_name, ref_area,
-           period, value, obs_status, source,
-           inserted_at, updated_at
+  rows <- DBI::dbGetQuery(con, glue('
+    SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source, inserted_at, updated_at
     FROM "{schema}"."indicator_values"
     {where}
     ORDER BY indicator_code, ref_area, period
-    LIMIT {limit} OFFSET {offset}
-    '
-  ))
+    LIMIT {limit} OFFSET {offset};
+  '))
 
-  list(
-    total = total,
-    limit = limit,
-    offset = offset,
-    rows = rows
-  )
+  list(total = total, limit = limit, offset = offset, rows = json_safe_df(rows))
 }
 
-# =========================
-# Export CSV
-# =========================
-#* @serializer csv
-#* @get /export/csv
-function(indicator_code = "", ref_area = "", start = NA, end = NA){
-  con <- pg_con(); on.exit(dbDisconnect(con), add = TRUE)
+# ---- Export XLSX ----
+#* @serializer contentType list(type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+#* @get /export/xlsx
+function(indicator_code = "", ref_area = "", start = NA, end = NA) {
+  con <- pg_con(); on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
   schema <- Sys.getenv("PGSCHEMA", "public")
 
-  sql <- glue('
-    SELECT indicator_code, indicator_name, ref_area,
-           period, value, obs_status, source
+  qry <- glue('
+    SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source
     FROM "{schema}"."indicator_values"
     WHERE 1=1
   ')
 
-  if (nzchar(indicator_code))
-    sql <- paste0(sql, glue(' AND indicator_code = {dbQuoteString(con, indicator_code)}'))
-  if (nzchar(ref_area))
-    sql <- paste0(sql, glue(' AND ref_area = {dbQuoteString(con, ref_area)}'))
-  if (!is.na(as.numeric(start)))
-    sql <- paste0(sql, glue(' AND period >= {as.numeric(start)}'))
-  if (!is.na(as.numeric(end)))
-    sql <- paste0(sql, glue(' AND period <= {as.numeric(end)}'))
+  if (nzchar(indicator_code)) qry <- paste0(qry, glue(' AND indicator_code = {DBI::dbQuoteString(con, indicator_code)}'))
+  if (nzchar(ref_area))       qry <- paste0(qry, glue(' AND ref_area = {DBI::dbQuoteString(con, ref_area)}'))
+  if (!is.na(suppressWarnings(as.numeric(start)))) qry <- paste0(qry, glue(' AND period >= {as.numeric(start)}'))
+  if (!is.na(suppressWarnings(as.numeric(end))))   qry <- paste0(qry, glue(' AND period <= {as.numeric(end)}'))
 
-  sql <- paste0(sql, " ORDER BY indicator_code, ref_area, period")
-  dbGetQuery(con, sql)
-}
-
-# =========================
-# Export XLSX
-# =========================
-#* @serializer contentType list(type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-#* @get /export/xlsx
-function(indicator_code = "", ref_area = "", start = NA, end = NA){
-  if (!requireNamespace("writexl", quietly = TRUE))
-    stop("Package writexl manquant")
-
-  dat <- plumber::call_api(
-    paste0(Sys.getenv("SELF_URL"), "/export/csv"),
-    list(indicator_code = indicator_code,
-         ref_area = ref_area,
-         start = start,
-         end = end)
-  )
+  qry <- paste0(qry, " ORDER BY indicator_code, ref_area, period;")
+  dat <- DBI::dbGetQuery(con, qry)
 
   tf <- tempfile(fileext = ".xlsx")
+  if (!requireNamespace("writexl", quietly = TRUE)) {
+    install.packages("writexl", repos = "https://cloud.r-project.org")
+  }
   writexl::write_xlsx(dat, tf)
   plumber::include_file(tf)
 }
 
-# =========================
-# Metrics (Prometheus-style)
-# =========================
+# ---- Metrics (texte) ----
 #* @serializer html
 #* @get /metrics
-function(){
-  con <- pg_con(); on.exit(dbDisconnect(con), add = TRUE)
+function() {
+  con <- pg_con(); on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
   schema <- Sys.getenv("PGSCHEMA", "public")
 
-  n <- dbGetQuery(con, glue(
-    'SELECT COUNT(*)::bigint AS n FROM "{schema}"."indicator_values"'
-  ))$n[1]
+  n <- DBI::dbGetQuery(con, glue('SELECT COUNT(*)::bigint AS n FROM "{schema}"."indicator_values";'))$n[1]
+  latest <- DBI::dbGetQuery(con, glue('SELECT max(inserted_at) AS max_ins, max(updated_at) AS max_upd FROM "{schema}"."indicator_values";'))
 
-  paste0("onu_api_rows_total ", n, "\n")
+  paste0(
+    "onu_api_rows_total ", n, "\n",
+    "onu_api_last_inserted_at ", as.numeric(as.POSIXct(latest$max_ins[[1]])), "\n",
+    "onu_api_last_updated_at ",  as.numeric(as.POSIXct(latest$max_upd[[1]])),  "\n"
+  )
 }
