@@ -7,147 +7,119 @@ suppressPackageStartupMessages({
   library(dotenv)
 })
 
-`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || is.na(x)) y else x
+`%||%` <- function(x, y) if (is.null(x) || is.na(x) || identical(x, "")) y else x
 
 # ---------------------------
-# 1) Charger .env UNIQUEMENT en local (et sans écraser les variables existantes)
+# 1) Chargement .env (LOCAL seulement)
+#    Sur Railway: on utilise DATABASE_URL en priorité et on ignore les PG* du .env
 # ---------------------------
 find_env <- function() {
-  cand <- c(
-    normalizePath(file.path(getwd(), "..", ".env"), mustWork = FALSE),
-    normalizePath(file.path(getwd(), ".env"), mustWork = FALSE),
-    normalizePath(file.path(dirname(getwd()), ".env"), mustWork = FALSE)
+  # priorité: racine projet puis dossier courant
+  candidates <- c(
+    file.path(getwd(), ".env"),
+    file.path(getwd(), "..", ".env"),
+    file.path(dirname(getwd()), ".env")
   )
-  for (p in cand) if (file.exists(p)) return(p)
+  candidates <- vapply(candidates, normalizePath, mustWork = FALSE, FUN.VALUE = character(1))
+  for (p in candidates) if (file.exists(p)) return(p)
   NA_character_
 }
 
-load_env_safely <- function(path) {
-  # Charge le .env mais NE remplace PAS les variables déjà définies
-  lines <- readLines(path, warn = FALSE, encoding = "UTF-8")
-  lines <- trimws(lines)
-  lines <- lines[lines != "" & !startsWith(lines, "#")]
-
-  parse_line <- function(x) {
-    x <- sub("^export\\s+", "", x)
-    if (!grepl("=", x, fixed = TRUE)) return(NULL)
-    key <- trimws(sub("=.*$", "", x))
-    val <- sub("^[^=]*=", "", x)
-    val <- trimws(val)
-    # enlever quotes simples/doubles si présentes
-    if (nchar(val) >= 2 && ((startsWith(val, "\"") && endsWith(val, "\"")) ||
-                           (startsWith(val, "'")  && endsWith(val, "'")))) {
-      val <- substr(val, 2, nchar(val) - 1)
-    }
-    list(key = key, val = val)
-  }
-
-  kvs <- lapply(lines, parse_line)
-  kvs <- kvs[!vapply(kvs, is.null, logical(1))]
-
-  for (kv in kvs) {
-    if (!nzchar(Sys.getenv(kv$key, unset = ""))) {
-      Sys.setenv(kv$key = kv$val)
-    }
-  }
-  invisible(TRUE)
-}
-
-DB_SOURCE <- "env"
-if (nzchar(Sys.getenv("DATABASE_URL", unset = ""))) {
-  DB_SOURCE <- "DATABASE_URL"
-  message("[plumber] DATABASE_URL détectée => .env ignoré (Railway).")
-} else {
+# Si DATABASE_URL est déjà présent => Railway => NE PAS charger .env
+if (!nzchar(Sys.getenv("DATABASE_URL", unset = ""))) {
   .env.path <- find_env()
   if (!is.na(.env.path)) {
-    load_env_safely(.env.path)
+    dotenv::load_dot_env(.env.path)  # pas de override=... (selon version dotenv)
     message("[plumber] .env chargé depuis: ", .env.path)
   } else {
-    message("[plumber] Aucun .env trouvé. (OK si Railway variables).")
+    message("[plumber] Pas de DATABASE_URL et pas de .env trouvé (OK si variables déjà définies).")
   }
+} else {
+  message("[plumber] DATABASE_URL détectée => .env ignoré (Railway).")
 }
 
 # ---------------------------
-# 2) Parser DATABASE_URL (sans httr2) + connexion PG
+# 2) Parse DATABASE_URL (sans httr2)
+#    Format typique: postgres://user:pass@host:port/dbname?sslmode=require
 # ---------------------------
 parse_database_url <- function(url) {
-  # Ex: postgres://user:pass@host:5432/dbname?sslmode=require
-  url0 <- url
-  url0 <- sub("^postgresql://", "postgres://", url0)
+  url <- trimws(url)
+  url <- sub("^postgresql://", "postgres://", url)
 
-  # query
-  q <- ""
-  if (grepl("\\?", url0)) {
-    q <- sub("^[^?]*\\?", "", url0)
-    url0 <- sub("\\?.*$", "", url0)
+  # enlever le schéma
+  rest <- sub("^postgres://", "", url)
+
+  # séparer query (?...)
+  parts_q <- strsplit(rest, "\\?", fixed = FALSE)[[1]]
+  main <- parts_q[1]
+  query <- if (length(parts_q) > 1) parts_q[2] else ""
+
+  # userinfo@host:port/db
+  # userinfo (optionnel)
+  at_split <- strsplit(main, "@", fixed = TRUE)[[1]]
+  if (length(at_split) == 2) {
+    userinfo <- at_split[1]
+    host_db  <- at_split[2]
+  } else {
+    userinfo <- ""
+    host_db  <- at_split[1]
   }
 
-  # remove scheme
-  rest <- sub("^postgres://", "", url0)
+  user <- ""
+  password <- ""
+  if (nzchar(userinfo)) {
+    up <- strsplit(userinfo, ":", fixed = TRUE)[[1]]
+    user <- utils::URLdecode(up[1])
+    if (length(up) > 1) password <- utils::URLdecode(paste(up[-1], collapse=":"))
+  }
 
-  # split creds / host
-  parts <- strsplit(rest, "@", fixed = TRUE)[[1]]
-  if (length(parts) != 2) stop("DATABASE_URL invalide (format user:pass@host:port/db attendu).")
-
-  cred <- parts[1]
-  hostdb <- parts[2]
-
-  # user / pass
-  user <- sub(":.*$", "", cred)
-  pass <- sub("^[^:]*:", "", cred)
-
-  user <- utils::URLdecode(user)
-  pass <- utils::URLdecode(pass)
-
-  # host:port / db
-  hp_db <- strsplit(hostdb, "/", fixed = TRUE)[[1]]
-  if (length(hp_db) < 2) stop("DATABASE_URL invalide (dbname manquant).")
-
+  # host:port/dbname
+  hp_db <- strsplit(host_db, "/", fixed = TRUE)[[1]]
   hostport <- hp_db[1]
-  dbname <- paste(hp_db[-1], collapse = "/")
-  dbname <- utils::URLdecode(dbname)
+  dbname   <- if (length(hp_db) > 1) utils::URLdecode(paste(hp_db[-1], collapse="/")) else ""
 
   hp <- strsplit(hostport, ":", fixed = TRUE)[[1]]
   host <- hp[1]
-  port <- if (length(hp) >= 2) as.integer(hp[2]) else 5432L
+  port <- if (length(hp) > 1) suppressWarnings(as.integer(hp[2])) else NA_integer_
 
-  # sslmode depuis query si présent
-  sslmode <- Sys.getenv("PGSSLMODE", unset = "prefer")
-  if (nzchar(q) && grepl("sslmode=", q, fixed = TRUE)) {
-    kv <- strsplit(q, "&", fixed = TRUE)[[1]]
-    kv <- kv[grepl("^sslmode=", kv)]
-    if (length(kv)) sslmode <- sub("^sslmode=", "", kv[1])
+  # query params
+  sslmode <- ""
+  if (nzchar(query)) {
+    kvs <- strsplit(query, "&", fixed = TRUE)[[1]]
+    for (kv in kvs) {
+      kv2 <- strsplit(kv, "=", fixed = TRUE)[[1]]
+      k <- utils::URLdecode(kv2[1] %||% "")
+      v <- utils::URLdecode(kv2[2] %||% "")
+      if (tolower(k) == "sslmode") sslmode <- v
+    }
   }
 
-  list(host = host, port = port, dbname = dbname, user = user, password = pass, sslmode = sslmode)
+  list(
+    host = host,
+    port = port,
+    dbname = dbname,
+    user = user,
+    password = password,
+    sslmode = sslmode
+  )
 }
 
+# ---------------------------
+# 3) Connexion PG: priorité DATABASE_URL, sinon PGHOST/PGPORT/...
+# ---------------------------
 pg_schema <- function() Sys.getenv("PGSCHEMA", unset = "public")
-pg_table  <- function() Sys.getenv("PGTABLE",  unset = "indicator_values")
 
-pg_con <- function() {
-  if (DB_SOURCE == "DATABASE_URL") {
-    cfg <- parse_database_url(Sys.getenv("DATABASE_URL"))
-    DBI::dbConnect(
-      RPostgres::Postgres(),
-      host     = cfg$host,
-      port     = cfg$port,
-      dbname   = cfg$dbname,
-      user     = cfg$user,
-      password = cfg$password,
-      sslmode  = cfg$sslmode
-    )
-  } else {
-    DBI::dbConnect(
-      RPostgres::Postgres(),
-      host     = Sys.getenv("PGHOST", unset = "localhost"),
-      port     = as.integer(Sys.getenv("PGPORT", unset = "5432")),
-      dbname   = Sys.getenv("PGDATABASE", unset = ""),
-      user     = Sys.getenv("PGUSER", unset = Sys.getenv("PGREADUSER", unset = "")),
-      password = Sys.getenv("PGPASSWORD", unset = Sys.getenv("PGREADPASS", unset = "")),
-      sslmode  = Sys.getenv("PGSSLMODE", unset = "prefer")
-    )
-  }
+# Table: utilise PGTABLE si fourni, sinon on détecte automatiquement
+pg_table_candidates <- function() {
+  unique(Filter(nzchar, c(
+    Sys.getenv("PGTABLE", unset = ""),
+    "indicator_values",
+    "indicator_values_all",
+    "indicator_values_staging",
+    "indicator_values_latest",
+    "indicator_value",
+    "indicators_values"
+  )))
 }
 
 table_exists <- function(con, schema, table) {
@@ -157,110 +129,171 @@ table_exists <- function(con, schema, table) {
     WHERE table_schema = $1 AND table_name = $2
     LIMIT 1;
   "
-  res <- DBI::dbGetQuery(con, q, params = list(schema, table))
-  nrow(res) > 0
+  x <- try(DBI::dbGetQuery(con, q, params = list(schema, table)), silent = TRUE)
+  is.data.frame(x) && nrow(x) > 0
 }
 
-# Convertir les colonnes non-JSON-friendly (ex pq_inet) en character
+pick_table <- function(con, schema) {
+  for (t in pg_table_candidates()) {
+    if (table_exists(con, schema, t)) return(t)
+  }
+  NA_character_
+}
+
+pg_con <- function() {
+  db_url <- Sys.getenv("DATABASE_URL", unset = "")
+  if (nzchar(db_url)) {
+    info <- parse_database_url(db_url)
+    # sslmode: DATABASE_URL > PGSSLMODE > prefer
+    sslmode <- info$sslmode %||% Sys.getenv("PGSSLMODE", unset = "prefer")
+    DBI::dbConnect(
+      RPostgres::Postgres(),
+      host     = info$host,
+      port     = if (!is.na(info$port)) info$port else 5432L,
+      dbname   = info$dbname,
+      user     = info$user,
+      password = info$password,
+      sslmode  = sslmode
+    )
+  } else {
+    DBI::dbConnect(
+      RPostgres::Postgres(),
+      host     = Sys.getenv("PGHOST"),
+      port     = as.integer(Sys.getenv("PGPORT", "5432")),
+      dbname   = Sys.getenv("PGDATABASE"),
+      user     = Sys.getenv("PGUSER"),
+      password = Sys.getenv("PGPASSWORD"),
+      sslmode  = Sys.getenv("PGSSLMODE", "prefer")
+    )
+  }
+}
+
+# Convertir en JSON “safe” (évite les classes bizarres type pq_inet)
 json_safe_df <- function(df) {
-  if (!is.data.frame(df) || nrow(df) == 0) return(df)
+  if (!is.data.frame(df)) return(df)
   for (nm in names(df)) {
-    cls <- class(df[[nm]])
-    if (any(cls %in% c("pq_inet", "POSIXlt"))) df[[nm]] <- as.character(df[[nm]])
-    if (inherits(df[[nm]], "POSIXct")) df[[nm]] <- format(df[[nm]], tz = "UTC", usetz = TRUE)
+    x <- df[[nm]]
+    if (inherits(x, c("POSIXct","POSIXlt"))) df[[nm]] <- format(x, tz="UTC", usetz=TRUE)
+    if (inherits(x, "difftime")) df[[nm]] <- as.numeric(x)
+    if (!is.atomic(x) || is.list(x)) df[[nm]] <- vapply(x, as.character, character(1))
+    if (inherits(x, "pq_inet")) df[[nm]] <- as.character(x)
   }
   df
 }
 
 # ---------------------------
-# 3) API Key (désactivée si API_KEY vide)
+# 4) API KEY filter (désactivée si API_KEY vide)
 # ---------------------------
 #* @filter apikey
 function(req, res) {
   allowed <- Sys.getenv("API_KEY", unset = "")
-  got <- req$HTTP_X_API_KEY %||% ""
+  got <- req$HTTP_X_API_KEY %||% req$HTTP_X_APIKEY %||% req$HTTP_AUTHORIZATION %||% ""
+  got <- sub("^Bearer\\s+", "", got)
 
-  if (identical(allowed, "") || identical(allowed, got)) {
+  if (!nzchar(allowed) || identical(allowed, got)) {
     forward()
   } else {
-    res$status <- 401L
-    list(error = TRUE, message = "Unauthorized: invalid API key")
+    res$status <- 401
+    list(error = "Unauthorized: invalid API key")
   }
 }
 
 # ---------------------------
-# 4) CORS
+# 5) CORS + OPTIONS
 # ---------------------------
 #* @plumber
 function(pr) {
-  origins <- strsplit(Sys.getenv("CORS_ALLOW_ORIGIN", unset = "*"), ",")[[1]]
+  origins <- strsplit(Sys.getenv("CORS_ALLOW_ORIGIN", "*"), ",")[[1]]
   origins <- trimws(origins)
 
   pr$registerHooks(list(
     preroute = function(req, res) {
       origin <- req$HTTP_ORIGIN %||% "*"
       allow  <- if ("*" %in% origins || origin %in% origins) origin else "null"
+
       res$setHeader("Access-Control-Allow-Origin", allow)
       res$setHeader("Access-Control-Allow-Methods", "GET, OPTIONS")
       res$setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+      res$setHeader("Access-Control-Max-Age", "86400")
+
+      if (identical(req$REQUEST_METHOD, "OPTIONS")) {
+        res$status <- 204
+        return(list())
+      }
+      NULL
     }
   ))
   pr
 }
 
 # ---------------------------
-# 5) Endpoints
+# Endpoints
 # ---------------------------
 
 #* @get /health
 function() {
-  list(status = "ok", time = as.character(Sys.time()), db_source = DB_SOURCE)
+  list(status = "ok", time = as.character(Sys.time()))
 }
 
 #* @get /debug/env
 function() {
+  # Montre les variables (et indique si DATABASE_URL est présent)
   list(
-    db_source = DB_SOURCE,
-    DATABASE_URL_set = nzchar(Sys.getenv("DATABASE_URL", unset = "")),
-    PGHOST = Sys.getenv("PGHOST", unset = ""),
-    PGPORT = Sys.getenv("PGPORT", unset = ""),
-    PGDATABASE = Sys.getenv("PGDATABASE", unset = ""),
-    PGUSER = Sys.getenv("PGUSER", unset = ""),
-    PGPASSWORD_set = nzchar(Sys.getenv("PGPASSWORD", unset = "")),
-    PGSSLMODE = Sys.getenv("PGSSLMODE", unset = ""),
+    DATABASE_URL_set = nzchar(Sys.getenv("DATABASE_URL", "")),
+    PGHOST   = Sys.getenv("PGHOST", ""),
+    PGPORT   = Sys.getenv("PGPORT", ""),
+    PGDATABASE = Sys.getenv("PGDATABASE", ""),
+    PGUSER   = Sys.getenv("PGUSER", ""),
+    PGPASSWORD_set = nzchar(Sys.getenv("PGPASSWORD", "")),
+    PGSSLMODE = Sys.getenv("PGSSLMODE", ""),
     PGSCHEMA = pg_schema(),
-    PGTABLE  = pg_table(),
-    CORS_ALLOW_ORIGIN = Sys.getenv("CORS_ALLOW_ORIGIN", unset = "")
+    PGTABLE  = Sys.getenv("PGTABLE", ""),
+    CORS_ALLOW_ORIGIN = Sys.getenv("CORS_ALLOW_ORIGIN", "")
   )
 }
 
 #* @get /debug/pingdb
-#* @serializer unboxedJSON
 function() {
   con <- pg_con()
   on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
 
   schema <- pg_schema()
-  table  <- pg_table()
+  tbl <- pick_table(con, schema)
 
-  # ping + table check
-  info <- DBI::dbGetQuery(con, "SELECT current_database() AS db, current_user AS usr, current_schema() AS schema, inet_server_addr() AS server_addr, inet_server_port() AS server_port, version();")
+  info <- DBI::dbGetQuery(con, "
+    SELECT current_database() AS db,
+           current_user      AS usr,
+           current_schema()  AS schema,
+           inet_server_addr()::text AS server_addr,
+           inet_server_port() AS server_port,
+           version()         AS version;
+  ")
   info <- json_safe_df(info)
-
-  exists <- table_exists(con, schema, table)
 
   list(
     ok = TRUE,
-    config = list(
-      schema = schema,
-      table  = table,
-      db_source = DB_SOURCE
-    ),
-    table_exists = exists,
+    detected = list(schema = schema, table = tbl %||% NA_character_),
     result = info
   )
 }
 
+#* @get /debug/tables
+function(pattern = "indicator") {
+  con <- pg_con()
+  on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
+
+  like <- paste0("%", gsub("%", "", pattern), "%")
+  x <- DBI::dbGetQuery(con, "
+    SELECT table_schema, table_name
+    FROM information_schema.tables
+    WHERE table_schema NOT IN ('pg_catalog','information_schema')
+      AND table_name ILIKE $1
+    ORDER BY table_schema, table_name;
+  ", params = list(like))
+  json_safe_df(x)
+}
+
+# ---- Export CSV ----
 #* @serializer csv
 #* @get /export/csv
 function(indicator_code = "", ref_area = "", start = NA, end = NA) {
@@ -268,11 +301,8 @@ function(indicator_code = "", ref_area = "", start = NA, end = NA) {
   on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
 
   schema <- pg_schema()
-  table  <- pg_table()
-
-  if (!table_exists(con, schema, table)) {
-    stop(glue("Table introuvable: {schema}.{table}. Vérifie PGTABLE/PGSCHEMA ou charge les données dans Railway Postgres."))
-  }
+  table <- pick_table(con, schema)
+  if (is.na(table)) stop(glue("Table introuvable dans {schema}. Candidates: {paste(pg_table_candidates(), collapse=', ')}"))
 
   qry <- glue('
     SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source, inserted_at, updated_at
@@ -283,23 +313,20 @@ function(indicator_code = "", ref_area = "", start = NA, end = NA) {
   if (nzchar(ref_area))       qry <- paste0(qry, glue(' AND ref_area = {DBI::dbQuoteString(con, ref_area)}'))
   if (!is.na(suppressWarnings(as.numeric(start)))) qry <- paste0(qry, glue(' AND period >= {as.numeric(start)}'))
   if (!is.na(suppressWarnings(as.numeric(end))))   qry <- paste0(qry, glue(' AND period <= {as.numeric(end)}'))
-  qry <- paste0(qry, ' ORDER BY indicator_code, ref_area, period;')
+  qry <- paste0(qry, " ORDER BY indicator_code, ref_area, period;")
 
   DBI::dbGetQuery(con, qry)
 }
 
+# ---- Liste indicateurs ----
 #* @get /indicators
-#* @serializer unboxedJSON
 function(q = "") {
   con <- pg_con()
   on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
 
   schema <- pg_schema()
-  table  <- pg_table()
-
-  if (!table_exists(con, schema, table)) {
-    stop(glue("Table introuvable: {schema}.{table}."))
-  }
+  table <- pick_table(con, schema)
+  if (is.na(table)) stop(glue("Table introuvable dans {schema}. Candidates: {paste(pg_table_candidates(), collapse=', ')}"))
 
   qry <- glue('
     SELECT DISTINCT indicator_code, indicator_name
@@ -309,12 +336,13 @@ function(q = "") {
   if (nzchar(q)) {
     like <- paste0("%", gsub("%", "", q), "%")
     qry <- paste0(qry, glue(' AND (indicator_code ILIKE {DBI::dbQuoteString(con, like)}
-                         OR  indicator_name ILIKE {DBI::dbQuoteString(con, like)})'))
+                             OR  indicator_name ILIKE {DBI::dbQuoteString(con, like)})'))
   }
   qry <- paste0(qry, " ORDER BY indicator_code;")
   json_safe_df(DBI::dbGetQuery(con, qry))
 }
 
+# ---- JSON paginé ----
 #* @serializer unboxedJSON
 #* @get /values
 function(indicator_code = "", ref_area = "", start = NA, end = NA, limit = 1000, offset = 0) {
@@ -322,11 +350,8 @@ function(indicator_code = "", ref_area = "", start = NA, end = NA, limit = 1000,
   on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
 
   schema <- pg_schema()
-  table  <- pg_table()
-
-  if (!table_exists(con, schema, table)) {
-    stop(glue("Table introuvable: {schema}.{table}."))
-  }
+  table <- pick_table(con, schema)
+  if (is.na(table)) stop(glue("Table introuvable dans {schema}. Candidates: {paste(pg_table_candidates(), collapse=', ')}"))
 
   limit  <- max(1L, min(as.integer(limit), 10000L))
   offset <- max(0L, as.integer(offset))
@@ -349,6 +374,7 @@ function(indicator_code = "", ref_area = "", start = NA, end = NA, limit = 1000,
   list(total = total, limit = limit, offset = offset, rows = json_safe_df(rows))
 }
 
+# ---- Export XLSX ----
 #* @serializer contentType list(type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 #* @get /export/xlsx
 function(indicator_code = "", ref_area = "", start = NA, end = NA) {
@@ -356,11 +382,8 @@ function(indicator_code = "", ref_area = "", start = NA, end = NA) {
   on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
 
   schema <- pg_schema()
-  table  <- pg_table()
-
-  if (!table_exists(con, schema, table)) {
-    stop(glue("Table introuvable: {schema}.{table}."))
-  }
+  table <- pick_table(con, schema)
+  if (is.na(table)) stop(glue("Table introuvable dans {schema}. Candidates: {paste(pg_table_candidates(), collapse=', ')}"))
 
   qry <- glue('
     SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source
@@ -375,14 +398,14 @@ function(indicator_code = "", ref_area = "", start = NA, end = NA) {
 
   dat <- DBI::dbGetQuery(con, qry)
   tf <- tempfile(fileext = ".xlsx")
-
   if (!requireNamespace("writexl", quietly = TRUE)) {
-    stop("Package 'writexl' manquant dans l'image Docker. Ajoute-le dans l'installation des packages.")
+    install.packages("writexl", repos = "https://cloud.r-project.org")
   }
   writexl::write_xlsx(dat, tf)
   plumber::include_file(tf)
 }
 
+# ---- Metrics (texte Prometheus-like) ----
 #* @serializer html
 #* @get /metrics
 function() {
@@ -390,22 +413,18 @@ function() {
   on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
 
   schema <- pg_schema()
-  table  <- pg_table()
-
-  if (!table_exists(con, schema, table)) {
-    return(paste0("onu_api_table_exists 0\n"))
-  }
+  table <- pick_table(con, schema)
+  if (is.na(table)) stop(glue("Table introuvable dans {schema}. Candidates: {paste(pg_table_candidates(), collapse=', ')}"))
 
   n <- DBI::dbGetQuery(con, glue('SELECT COUNT(*)::bigint AS n FROM "{schema}"."{table}";'))$n[1]
   latest <- DBI::dbGetQuery(con, glue('SELECT max(inserted_at) AS max_ins, max(updated_at) AS max_upd FROM "{schema}"."{table}";'))
 
-  max_ins <- suppressWarnings(as.numeric(as.POSIXct(latest$max_ins[[1]])))
-  max_upd <- suppressWarnings(as.numeric(as.POSIXct(latest$max_upd[[1]])))
+  max_ins <- latest$max_ins[[1]]
+  max_upd <- latest$max_upd[[1]]
 
   paste0(
-    "onu_api_table_exists 1\n",
     "onu_api_rows_total ", n, "\n",
-    "onu_api_last_inserted_at ", (max_ins %||% NA), "\n",
-    "onu_api_last_updated_at ",  (max_upd %||% NA), "\n"
+    "onu_api_last_inserted_at ", if (!is.na(max_ins)) as.numeric(as.POSIXct(max_ins)) else "NaN", "\n",
+    "onu_api_last_updated_at ",  if (!is.na(max_upd)) as.numeric(as.POSIXct(max_upd)) else "NaN", "\n"
   )
-} 
+}
