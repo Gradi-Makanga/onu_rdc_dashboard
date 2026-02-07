@@ -1,66 +1,51 @@
 # api/plumber.R
-suppressPackageStartupMessages({
-  library(plumber)
-  library(DBI)
-  library(RPostgres)
-  library(glue)
-  library(dplyr)
-  library(dotenv)
-})
+library(plumber)
+library(DBI)
+library(RPostgres)
+library(glue)
+library(dotenv)
 
-# ------------------------------------------------------------------
-# .env (optionnel en local, ignoré en prod Railway)
-# ------------------------------------------------------------------
+# ==============================
+# Load .env (local only)
+# ==============================
 if (file.exists(".env")) {
   dotenv::load_dot_env(".env")
   message("[plumber] .env chargé depuis .env")
 }
 
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
-`%||%` <- function(x, y) if (is.null(x) || is.na(x) || x == "") y else x
-
-# ------------------------------------------------------------------
-# Connexion Postgres (Railway FIRST)
-# ------------------------------------------------------------------
+# ==============================
+# PostgreSQL connection helper
+# ==============================
 pg_con <- function() {
 
-  # Railway standard
-  if (nzchar(Sys.getenv("DATABASE_URL"))) {
-    return(
-      DBI::dbConnect(
-        RPostgres::Postgres(),
-        dbname = Sys.getenv("DATABASE_URL")
-      )
-    )
+  # ---- Railway mode (PRIORITY) ----
+  db_url <- Sys.getenv("DATABASE_URL", "")
+  if (nzchar(db_url)) {
+    return(DBI::dbConnect(
+      RPostgres::Postgres(),
+      dbname = db_url
+    ))
   }
 
-  # Fallback manuel
+  # ---- Local / fallback mode ----
   DBI::dbConnect(
     RPostgres::Postgres(),
-    host     = Sys.getenv("PGHOST"),
+    host     = Sys.getenv("PGHOST", "localhost"),
     port     = as.integer(Sys.getenv("PGPORT", "5432")),
     dbname   = Sys.getenv("PGDATABASE"),
     user     = Sys.getenv("PGUSER"),
     password = Sys.getenv("PGPASSWORD"),
-    sslmode  = "prefer"
+    sslmode  = Sys.getenv("PGSSLMODE", "prefer")
   )
 }
 
-# ------------------------------------------------------------------
-# Configuration table
-# ------------------------------------------------------------------
-PGSCHEMA <- Sys.getenv("PGSCHEMA", "public")
-PGTABLE  <- Sys.getenv("PGTABLE", "indicator_values")
-
-# ------------------------------------------------------------------
+# ==============================
 # CORS
-# ------------------------------------------------------------------
+# ==============================
 #* @plumber
-function(pr) {
+function(pr){
   pr$registerHooks(list(
-    preroute = function(req, res) {
+    preroute = function(req, res){
       res$setHeader("Access-Control-Allow-Origin", "*")
       res$setHeader("Access-Control-Allow-Methods", "GET, OPTIONS")
       res$setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
@@ -69,175 +54,105 @@ function(pr) {
   pr
 }
 
-# ------------------------------------------------------------------
+# ==============================
 # Health
-# ------------------------------------------------------------------
+# ==============================
 #* @get /health
-function() {
+function(){
   list(ok = TRUE, time = as.character(Sys.time()))
 }
 
-# ------------------------------------------------------------------
-# Debug env
-# ------------------------------------------------------------------
+# ==============================
+# Debug ENV
+# ==============================
 #* @get /debug/env
-function() {
+function(){
   list(
-    PGSCHEMA = PGSCHEMA,
-    PGTABLE  = PGTABLE,
     DATABASE_URL_set = nzchar(Sys.getenv("DATABASE_URL")),
     PGHOST = Sys.getenv("PGHOST"),
     PGDATABASE = Sys.getenv("PGDATABASE"),
-    PGUSER = Sys.getenv("PGUSER")
+    PGUSER = Sys.getenv("PGUSER"),
+    PGSCHEMA = Sys.getenv("PGSCHEMA", "public"),
+    PGTABLE = Sys.getenv("PGTABLE", "indicator_values")
   )
 }
 
-# ------------------------------------------------------------------
-# Debug ping DB (CRITIQUE)
-# ------------------------------------------------------------------
+# ==============================
+# Debug Ping DB  ✅
+# ==============================
 #* @get /debug/pingdb
-function() {
+function(){
   con <- pg_con()
   on.exit(DBI::dbDisconnect(con), add = TRUE)
 
   res <- DBI::dbGetQuery(con, "
     SELECT
-      current_database()  AS db,
-      current_user        AS usr,
-      current_schema()    AS schema,
-      inet_server_addr()  AS server_addr,
-      inet_server_port()  AS server_port,
+      current_database() AS db,
+      current_user       AS usr,
+      current_schema()   AS schema,
+      inet_server_addr() AS server_addr,
+      inet_server_port() AS server_port,
       version()
   ")
 
   list(
     ok = TRUE,
-    config = list(
-      schema = PGSCHEMA,
-      table  = PGTABLE
-    ),
     result = res
   )
 }
 
-# ------------------------------------------------------------------
-# Liste indicateurs
-# ------------------------------------------------------------------
+# ==============================
+# Indicators
+# ==============================
 #* @get /indicators
-function(q = "") {
+function(){
   con <- pg_con()
   on.exit(DBI::dbDisconnect(con), add = TRUE)
 
-  sql <- glue("
+  schema <- Sys.getenv("PGSCHEMA", "public")
+  table  <- Sys.getenv("PGTABLE", "indicator_values")
+
+  DBI::dbGetQuery(con, glue("
     SELECT DISTINCT indicator_code, indicator_name
-    FROM {DBI::dbQuoteIdentifier(con, PGSCHEMA)}.{DBI::dbQuoteIdentifier(con, PGTABLE)}
-    WHERE indicator_code IS NOT NULL
-  ")
-
-  if (nzchar(q)) {
-    like <- paste0('%', q, '%')
-    sql <- glue("{sql}
-      AND (indicator_code ILIKE {DBI::dbQuoteString(con, like)}
-           OR indicator_name ILIKE {DBI::dbQuoteString(con, like)})
-    ")
-  }
-
-  DBI::dbGetQuery(con, sql)
-}
-
-# ------------------------------------------------------------------
-# Valeurs paginées
-# ------------------------------------------------------------------
-#* @get /values
-#* @serializer unboxedJSON
-function(indicator_code = "", ref_area = "", limit = 1000, offset = 0) {
-
-  con <- pg_con()
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-
-  limit  <- max(1, min(as.integer(limit), 10000))
-  offset <- max(0, as.integer(offset))
-
-  where <- "WHERE 1=1"
-
-  if (nzchar(indicator_code))
-    where <- glue("{where} AND indicator_code = {DBI::dbQuoteString(con, indicator_code)}")
-
-  if (nzchar(ref_area))
-    where <- glue("{where} AND ref_area = {DBI::dbQuoteString(con, ref_area)}")
-
-  total <- DBI::dbGetQuery(con, glue("
-    SELECT COUNT(*)::int AS n
-    FROM {DBI::dbQuoteIdentifier(con, PGSCHEMA)}.{DBI::dbQuoteIdentifier(con, PGTABLE)}
-    {where}
-  "))$n[1]
-
-  rows <- DBI::dbGetQuery(con, glue("
-    SELECT *
-    FROM {DBI::dbQuoteIdentifier(con, PGSCHEMA)}.{DBI::dbQuoteIdentifier(con, PGTABLE)}
-    {where}
-    ORDER BY indicator_code, ref_area, period
-    LIMIT {limit} OFFSET {offset}
+    FROM \"{schema}\".\"{table}\"
+    ORDER BY indicator_code
   "))
-
-  list(
-    total  = total,
-    limit  = limit,
-    offset = offset,
-    rows   = rows
-  )
 }
 
-# ------------------------------------------------------------------
-# Export CSV
-# ------------------------------------------------------------------
-#* @serializer csv
-#* @get /export/csv
-function() {
+# ==============================
+# Values
+# ==============================
+#* @get /values
+function(limit = 1000, offset = 0){
   con <- pg_con()
   on.exit(DBI::dbDisconnect(con), add = TRUE)
+
+  schema <- Sys.getenv("PGSCHEMA", "public")
+  table  <- Sys.getenv("PGTABLE", "indicator_values")
 
   DBI::dbGetQuery(con, glue("
     SELECT *
-    FROM {DBI::dbQuoteIdentifier(con, PGSCHEMA)}.{DBI::dbQuoteIdentifier(con, PGTABLE)}
+    FROM \"{schema}\".\"{table}\"
     ORDER BY indicator_code, ref_area, period
+    LIMIT {as.integer(limit)} OFFSET {as.integer(offset)}
   "))
 }
 
-# ------------------------------------------------------------------
-# Export XLSX
-# ------------------------------------------------------------------
-#* @get /export/xlsx
-function() {
-  if (!requireNamespace("writexl", quietly = TRUE))
-    stop("Package writexl missing")
-
-  con <- pg_con()
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-
-  dat <- DBI::dbGetQuery(con, glue("
-    SELECT *
-    FROM {DBI::dbQuoteIdentifier(con, PGSCHEMA)}.{DBI::dbQuoteIdentifier(con, PGTABLE)}
-  "))
-
-  tf <- tempfile(fileext = ".xlsx")
-  writexl::write_xlsx(dat, tf)
-  plumber::include_file(tf)
-}
-
-# ------------------------------------------------------------------
-# Metrics (Prometheus)
-# ------------------------------------------------------------------
+# ==============================
+# Metrics
+# ==============================
 #* @serializer html
 #* @get /metrics
-function() {
+function(){
   con <- pg_con()
   on.exit(DBI::dbDisconnect(con), add = TRUE)
 
-  n <- DBI::dbGetQuery(con, glue("
-    SELECT COUNT(*)::bigint AS n
-    FROM {DBI::dbQuoteIdentifier(con, PGSCHEMA)}.{DBI::dbQuoteIdentifier(con, PGTABLE)}
-  "))$n[1]
+  schema <- Sys.getenv("PGSCHEMA", "public")
+  table  <- Sys.getenv("PGTABLE", "indicator_values")
 
-  paste0("onu_api_rows_total ", n, "\n")
-} 
+  n <- DBI::dbGetQuery(con, glue("
+    SELECT COUNT(*) AS n FROM \"{schema}\".\"{table}\"
+  "))$n
+
+  paste0("onu_rows_total ", n, "\n")
+}
