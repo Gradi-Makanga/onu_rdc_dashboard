@@ -24,7 +24,7 @@ pg_con <- function() {
     dbname   = Sys.getenv("PGDATABASE"),
     user     = Sys.getenv("PGUSER", Sys.getenv("PGREADUSER","")),
     password = Sys.getenv("PGPASSWORD", Sys.getenv("PGREADPASS","")),
-    sslmode  = Sys.getenv("PGSSLMODE","prefer")
+    sslmode  = Sys.getenv("PGSSLMODE","require")
   )
 }
 `%||%` <- function(x, y) if (is.null(x) || is.na(x)) y else x
@@ -91,7 +91,7 @@ function(){
 function(indicator_code="", ref_area="", start=NA, end=NA){
   con <- pg_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
   schema <- Sys.getenv("PGSCHEMA","public")
-  qry <- glue('SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source, inserted_at, updated_at
+  qry <- glue('SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source
                FROM "{schema}"."indicator_values"
                WHERE 1=1')
   if (nzchar(indicator_code)) qry <- paste0(qry, glue(' AND indicator_code = {DBI::dbQuoteString(con, indicator_code)}'))
@@ -136,7 +136,7 @@ function(indicator_code="", ref_area="", start=NA, end=NA, limit=1000, offset=0)
 
   total <- DBI::dbGetQuery(con, glue('SELECT COUNT(*)::int AS n FROM "{schema}"."indicator_values" {where};'))$n[1]
   rows  <- DBI::dbGetQuery(con, glue('
-    SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source, inserted_at, updated_at
+    SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source
     FROM "{schema}"."indicator_values"
     {where}
     ORDER BY indicator_code, ref_area, period
@@ -174,9 +174,7 @@ function(){
   n <- DBI::dbGetQuery(con, glue('SELECT COUNT(*)::bigint AS n FROM "{schema}"."indicator_values";'))$n[1]
   latest <- DBI::dbGetQuery(con, glue('SELECT max(inserted_at) AS max_ins, max(updated_at) AS max_upd FROM "{schema}"."indicator_values";'))
   paste0(
-    "onu_api_rows_total ", n, "\n",
-    "onu_api_last_inserted_at ", as.numeric(as.POSIXct(latest$max_ins[[1]])), "\n",
-    "onu_api_last_updated_at ",  as.numeric(as.POSIXct(latest$max_upd[[1]])),  "\n"
-  )
-}
+    "onu_api_rows_total ", n, "\n"
+  ) 
+} 
  
