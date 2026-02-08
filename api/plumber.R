@@ -454,4 +454,4 @@ function() {
     "onu_api_last_inserted_at ", if (is.na(max_ins)) "NaN" else as.numeric(as.POSIXct(max_ins)), "\n",
     "onu_api_last_updated_at ",  if (is.na(max_upd)) "NaN" else as.numeric(as.POSIXct(max_upd)), "\n"
   )
-} 
+}
