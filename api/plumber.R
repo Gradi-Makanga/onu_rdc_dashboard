@@ -1,9 +1,23 @@
-# D:/Documents/Poste_UN/Projet_Automatisation/onu_rdc_dashboard/api/plumber.R
+# plumber.R
 library(plumber)
-library(DBI); library(RPostgres)
-library(readr); library(dplyr); library(glue); library(dotenv)
+library(DBI)
+library(RPostgres)
+library(dplyr)
+library(glue)
+library(dotenv)
 
-# --- Localisation dynamique du .env (parent de 'api' en priorité) ---
+`%||%` <- function(x, y) if (is.null(x) || is.na(x) || identical(x, "")) y else x
+
+# --------- Détection production ----------
+is_production <- function() {
+  # Railway définit généralement RAILWAY_ENVIRONMENT
+  # Tu peux aussi forcer avec RUNTIME=production
+  env1 <- Sys.getenv("RAILWAY_ENVIRONMENT", "")
+  env2 <- tolower(Sys.getenv("RUNTIME", ""))
+  nzchar(env1) || env2 == "production"
+}
+
+# --------- Chargement .env (LOCAL uniquement) ----------
 find_env <- function(){
   p1 <- normalizePath(file.path(getwd(), "..", ".env"), mustWork = FALSE)
   p2 <- normalizePath(file.path(getwd(), ".env"), mustWork = FALSE)
@@ -11,23 +25,32 @@ find_env <- function(){
   for (p in c(p1,p2,p3)) if (file.exists(p)) return(p)
   NA_character_
 }
-.env.path <- find_env()
-if (is.na(.env.path)) stop("❌ Fichier .env introuvable (place-le à la racine du projet).")
-dotenv::load_dot_env(.env.path)
-message("[plumber] .env chargé depuis: ", .env.path)
 
+if (!is_production()) {
+  .env.path <- find_env()
+  if (!is.na(.env.path)) {
+    dotenv::load_dot_env(.env.path)
+    message("[plumber] LOCAL: .env chargé depuis: ", .env.path)
+  } else {
+    message("[plumber] LOCAL: aucun .env trouvé (OK si tu utilises les variables système)")
+  }
+} else {
+  message("[plumber] PRODUCTION: .env ignoré (variables Railway uniquement)")
+}
+
+# --------- Connexion PostgreSQL ----------
 pg_con <- function() {
   DBI::dbConnect(
     RPostgres::Postgres(),
     host     = Sys.getenv("PGHOST"),
-    port     = as.integer(Sys.getenv("PGPORT","5432")),
+    port     = as.integer(Sys.getenv("PGPORT", "5432")),
     dbname   = Sys.getenv("PGDATABASE"),
-    user     = Sys.getenv("PGUSER", Sys.getenv("PGREADUSER","")),
-    password = Sys.getenv("PGPASSWORD", Sys.getenv("PGREADPASS","")),
-    sslmode  = Sys.getenv("PGSSLMODE","require")
+    user     = Sys.getenv("PGUSER"),
+    password = Sys.getenv("PGPASSWORD"),
+    # Railway: mieux de forcer require
+    sslmode  = Sys.getenv("PGSSLMODE", "require")
   )
 }
-`%||%` <- function(x, y) if (is.null(x) || is.na(x)) y else x
 
 # ---- API Key (désactivée si API_KEY vide) ----
 #* @filter apikey
@@ -62,17 +85,16 @@ function(pr){
 #* @get /health
 function(){ list(status="ok", time=as.character(Sys.time())) }
 
-# ---- Debug env ----
+# ---- Debug env (utile pour Railway) ----
 #* @get /debug/env
 function(){
   list(
+    mode = if (is_production()) "production" else "local",
     PGHOST = Sys.getenv("PGHOST"),
     PGPORT = Sys.getenv("PGPORT"),
     PGDATABASE = Sys.getenv("PGDATABASE"),
     PGUSER = Sys.getenv("PGUSER"),
-    PGREADUSER = Sys.getenv("PGREADUSER"),
     PGPASSWORD_set = nzchar(Sys.getenv("PGPASSWORD")),
-    PGREADPASS_set = nzchar(Sys.getenv("PGREADPASS")),
     PGSSLMODE = Sys.getenv("PGSSLMODE"),
     CORS_ALLOW_ORIGIN = Sys.getenv("CORS_ALLOW_ORIGIN")
   )
@@ -82,7 +104,7 @@ function(){
 #* @get /debug/pingdb
 function(){
   con <- pg_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
-  DBI::dbGetQuery(con, 'SELECT current_database() AS db, current_user AS user, current_schema() AS schema, version();')
+  DBI::dbGetQuery(con, 'SELECT current_database() AS db, current_user AS "user", current_schema() AS schema, version();')
 }
 
 # ---- Export CSV ----
@@ -91,13 +113,16 @@ function(){
 function(indicator_code="", ref_area="", start=NA, end=NA){
   con <- pg_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
   schema <- Sys.getenv("PGSCHEMA","public")
+
   qry <- glue('SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source
                FROM "{schema}"."indicator_values"
                WHERE 1=1')
+
   if (nzchar(indicator_code)) qry <- paste0(qry, glue(' AND indicator_code = {DBI::dbQuoteString(con, indicator_code)}'))
   if (nzchar(ref_area))       qry <- paste0(qry, glue(' AND ref_area = {DBI::dbQuoteString(con, ref_area)}'))
   if (!is.na(suppressWarnings(as.numeric(start)))) qry <- paste0(qry, glue(' AND period >= {as.numeric(start)}'))
   if (!is.na(suppressWarnings(as.numeric(end))))   qry <- paste0(qry, glue(' AND period <= {as.numeric(end)}'))
+
   qry <- paste0(qry, " ORDER BY indicator_code, ref_area, period;")
   DBI::dbGetQuery(con, qry)
 }
@@ -107,14 +132,17 @@ function(indicator_code="", ref_area="", start=NA, end=NA){
 function(q = ""){
   con <- pg_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
   schema <- Sys.getenv("PGSCHEMA","public")
+
   qry <- glue('SELECT DISTINCT indicator_code, indicator_name
                FROM "{schema}"."indicator_values"
                WHERE indicator_code IS NOT NULL')
+
   if (nzchar(q)) {
     like <- paste0("%", gsub("%","",q), "%")
     qry <- paste0(qry, glue(' AND (indicator_code ILIKE {DBI::dbQuoteString(con, like)}
                         OR    indicator_name ILIKE {DBI::dbQuoteString(con, like)})'))
   }
+
   qry <- paste0(qry, " ORDER BY indicator_code;")
   DBI::dbGetQuery(con, qry)
 }
@@ -125,6 +153,7 @@ function(q = ""){
 function(indicator_code="", ref_area="", start=NA, end=NA, limit=1000, offset=0){
   con <- pg_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
   schema <- Sys.getenv("PGSCHEMA","public")
+
   limit  <- max(1, min(as.integer(limit), 10000))
   offset <- max(0, as.integer(offset))
 
@@ -135,6 +164,7 @@ function(indicator_code="", ref_area="", start=NA, end=NA, limit=1000, offset=0)
   if (!is.na(suppressWarnings(as.numeric(end))))   where <- paste0(where, glue(' AND period <= {as.numeric(end)}'))
 
   total <- DBI::dbGetQuery(con, glue('SELECT COUNT(*)::int AS n FROM "{schema}"."indicator_values" {where};'))$n[1]
+
   rows  <- DBI::dbGetQuery(con, glue('
     SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source
     FROM "{schema}"."indicator_values"
@@ -142,6 +172,7 @@ function(indicator_code="", ref_area="", start=NA, end=NA, limit=1000, offset=0)
     ORDER BY indicator_code, ref_area, period
     LIMIT {limit} OFFSET {offset};
   '))
+
   list(total = total, limit = limit, offset = offset, rows = rows)
 }
 
@@ -151,14 +182,18 @@ function(indicator_code="", ref_area="", start=NA, end=NA, limit=1000, offset=0)
 function(indicator_code="", ref_area="", start=NA, end=NA){
   con <- pg_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
   schema <- Sys.getenv("PGSCHEMA","public")
+
   qry <- glue('SELECT indicator_code, indicator_name, ref_area, period, value, obs_status, source
                FROM "{schema}"."indicator_values" WHERE 1=1')
+
   if (nzchar(indicator_code)) qry <- paste0(qry, glue(' AND indicator_code = {DBI::dbQuoteString(con, indicator_code)}'))
   if (nzchar(ref_area))       qry <- paste0(qry, glue(' AND ref_area = {DBI::dbQuoteString(con, ref_area)}'))
   if (!is.na(suppressWarnings(as.numeric(start)))) qry <- paste0(qry, glue(' AND period >= {as.numeric(start)}'))
   if (!is.na(suppressWarnings(as.numeric(end))))   qry <- paste0(qry, glue(' AND period <= {as.numeric(end)}'))
+
   qry <- paste0(qry, " ORDER BY indicator_code, ref_area, period;")
   dat <- DBI::dbGetQuery(con, qry)
+
   tf <- tempfile(fileext = ".xlsx")
   if (!requireNamespace("writexl", quietly = TRUE)) install.packages("writexl")
   writexl::write_xlsx(dat, tf)
@@ -171,10 +206,7 @@ function(indicator_code="", ref_area="", start=NA, end=NA){
 function(){
   con <- pg_con(); on.exit(DBI::dbDisconnect(con), add = TRUE)
   schema <- Sys.getenv("PGSCHEMA","public")
+
   n <- DBI::dbGetQuery(con, glue('SELECT COUNT(*)::bigint AS n FROM "{schema}"."indicator_values";'))$n[1]
-  latest <- DBI::dbGetQuery(con, glue('SELECT max(inserted_at) AS max_ins, max(updated_at) AS max_upd FROM "{schema}"."indicator_values";'))
-  paste0(
-    "onu_api_rows_total ", n, "\n"
-  ) 
-} 
- 
+  paste0("onu_api_rows_total ", n, "\n")
+}
