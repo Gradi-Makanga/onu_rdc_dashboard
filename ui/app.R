@@ -159,7 +159,7 @@ SOCIO_CODES <- c(
   "IND054","IND055","IND061","IND062","IND063","IND060","IND088","IND089","IND090","IND091","IND092"
 )   
 
-# ---------- UI ----------
+# ---------- UI ----------  
 ui <- fluidPage(
   tags$head(tags$style(HTML("
 :root {
@@ -308,8 +308,8 @@ table.dataTable tbody tr:hover { background-color: #eaf2ff !important; }
           h2("ONU RDC - Indicateurs ODD et Socioéconomiques")
       ),
       div(class="title-right",
-          img(src = "odd.JPG",   alt = "ODD"),
-          img(src = "socio.PNG", alt = "Socioéconomique")
+          img(src = "odd.jpg",   alt = "ODD"),
+          img(src = "socio.png", alt = "Socioéconomique")
       )
   ),
 
