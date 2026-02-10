@@ -8,6 +8,7 @@ RUN install.r \
     plumber \
     DBI \
     targets \
+    stringr \
     RPostgres \
     jsonlite \
     httr2 \
