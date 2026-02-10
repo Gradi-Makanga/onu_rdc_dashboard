@@ -34,32 +34,36 @@ load_dotenv_if_any <- function() {
 pg_connect <- function() {
   load_dotenv_if_any()
 
-  # 1) Railway / prod : DATABASE_URL (recommandé)
   url <- Sys.getenv("DATABASE_URL", "")
-  if (nzchar(url)) {
-    message("[pg_connect] Using DATABASE_URL")
-    con <- DBI::dbConnect(RPostgres::Postgres(), dbname = url)
-    try(DBI::dbExecute(con, "SET client_encoding TO 'UTF8';"), silent = TRUE)
-    return(con)
-  }
+  if (!nzchar(url)) stop("DATABASE_URL is missing")
 
-  # 2) Fallback (local) : variables PG*
-  need <- c("PGHOST","PGDATABASE","PGUSER","PGPASSWORD")
-  miss <- need[!nzchar(Sys.getenv(need))]
-  if (length(miss)) stop("Missing required env vars: ", paste(miss, collapse=", "))
+  message("[pg_connect] Using DATABASE_URL")
 
-  message("[pg_connect] Using PGHOST/PG*")
+  # Parse l'URL postgres Railway
+  m <- regexec(
+    "postgresql://([^:]+):([^@]+)@([^:]+):([0-9]+)/(.+)",
+    url
+  )
+  parts <- regmatches(url, m)[[1]]
+
+  user <- parts[2]
+  password <- parts[3]
+  host <- parts[4]
+  port <- parts[5]
+  dbname <- parts[6]
+
   con <- DBI::dbConnect(
     RPostgres::Postgres(),
-    host     = Sys.getenv("PGHOST"),
-    port     = as.integer(Sys.getenv("PGPORT","5432")),
-    dbname   = Sys.getenv("PGDATABASE"),
-    user     = Sys.getenv("PGUSER"),
-    password = Sys.getenv("PGPASSWORD"),
-    sslmode  = Sys.getenv("PGSSLMODE","prefer")
+    host = host,
+    port = as.integer(port),
+    dbname = dbname,
+    user = user,
+    password = password,
+    sslmode = "require"
   )
+
   try(DBI::dbExecute(con, "SET client_encoding TO 'UTF8';"), silent = TRUE)
-  con 
+  con
 }
 
 # ------------------------------ Utilitaires ---------------------------------
