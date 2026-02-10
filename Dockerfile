@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN install.r \
     plumber \
     DBI \
+    targets \
     RPostgres \
     jsonlite \
     httr2 \
