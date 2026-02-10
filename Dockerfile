@@ -11,6 +11,7 @@ RUN install.r \
     stringr \
     tidyr \
     rvest \
+    arrow \
     RPostgres \
     jsonlite \
     httr2 \
