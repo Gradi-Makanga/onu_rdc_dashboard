@@ -86,9 +86,7 @@ ensure_tables_and_view <- function(con, schema="public",
        value          DOUBLE PRECISION,
        obs_status     TEXT,
        source         TEXT NOT NULL,
-       indicator_name TEXT,
-       inserted_at    TIMESTAMPTZ DEFAULT now(),
-       updated_at     TIMESTAMPTZ DEFAULT now()
+       indicator_name TEXT
      );", schema, table_main))
   DBI::dbExecute(con, sprintf("ALTER TABLE \"%s\".\"%s\" ADD COLUMN IF NOT EXISTS indicator_name TEXT;", schema, table_main))
 
@@ -147,7 +145,7 @@ ensure_tables_and_view <- function(con, schema="public",
      END $$;",
     schema, table_main, fn_name
   )
-  DBI::dbExecute(con, sql_trg)
+  DBI::dbExecute(con, sql_trg) 
 
   # --- Table STAGING
   DBI::dbExecute(con, sprintf(
@@ -169,14 +167,13 @@ ensure_tables_and_view <- function(con, schema="public",
   sql_view <- sprintf(
     "CREATE VIEW \"%s\".\"%s\" AS
        SELECT 'main'::text AS record_origin,
-              indicator_code, ref_area, period, value, obs_status, source, indicator_name, inserted_at, updated_at
+              indicator_code, ref_area, period, value, obs_status, source, indicator_name
        FROM \"%s\".\"%s\"
      UNION ALL
        SELECT 'staging'::text AS record_origin,
               indicator_code, ref_area, period, value, obs_status,
               COALESCE(source, 'unknown') AS source,
-              indicator_name,
-              load_ts AS inserted_at, load_ts AS updated_at
+              indicator_name
        FROM \"%s\".\"%s\";",
     schema, view_all, schema, table_main, schema, table_stg
   )
