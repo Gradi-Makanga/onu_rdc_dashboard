@@ -10,6 +10,7 @@ RUN install.r \
     targets \
     stringr \
     tidyr \
+    rvest \
     RPostgres \
     jsonlite \
     httr2 \
