@@ -33,9 +33,22 @@ load_dotenv_if_any <- function() {
 
 pg_connect <- function() {
   load_dotenv_if_any()
+
+  # 1) Railway / prod : DATABASE_URL (recommandé)
+  url <- Sys.getenv("DATABASE_URL", "")
+  if (nzchar(url)) {
+    message("[pg_connect] Using DATABASE_URL")
+    con <- DBI::dbConnect(RPostgres::Postgres(), dbname = url)
+    try(DBI::dbExecute(con, "SET client_encoding TO 'UTF8';"), silent = TRUE)
+    return(con)
+  }
+
+  # 2) Fallback (local) : variables PG*
   need <- c("PGHOST","PGDATABASE","PGUSER","PGPASSWORD")
   miss <- need[!nzchar(Sys.getenv(need))]
   if (length(miss)) stop("Missing required env vars: ", paste(miss, collapse=", "))
+
+  message("[pg_connect] Using PGHOST/PG*")
   con <- DBI::dbConnect(
     RPostgres::Postgres(),
     host     = Sys.getenv("PGHOST"),
@@ -46,7 +59,7 @@ pg_connect <- function() {
     sslmode  = Sys.getenv("PGSSLMODE","prefer")
   )
   try(DBI::dbExecute(con, "SET client_encoding TO 'UTF8';"), silent = TRUE)
-  con
+  con 
 }
 
 # ------------------------------ Utilitaires ---------------------------------
