@@ -9,6 +9,7 @@ RUN install.r \
     DBI \
     targets \
     stringr \
+    tidyr \
     RPostgres \
     jsonlite \
     httr2 \
