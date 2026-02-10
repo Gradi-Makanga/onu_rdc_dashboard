@@ -26,7 +26,8 @@ RUN install.r \
     sf \
     plotly \
     RPostgres \
-    dotenv
+    targets \
+    dotenv 
 
 WORKDIR /app
 COPY ui /app
