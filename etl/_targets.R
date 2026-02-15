@@ -1022,6 +1022,15 @@ Data <- Data %>%
   )
 
 
+Data <- Data %>%
+  mutate(
+    value = case_when(
+      indicator_code %in% c("IND088", "IND144") ~ as.numeric(value) * 1e9,
+      TRUE ~ as.numeric(value)
+    )
+  )
+
+
 # (optionnel) trier
 Data <- Data %>% arrange(indicator_code)
 

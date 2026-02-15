@@ -726,3 +726,7 @@ The following objects are masked from 'package:base':
 Running plumber API at http://127.0.0.1:8000
 Running plumber API at http://127.0.0.1:8000
 Running swagger Docs at http://127.0.0.1:8000/__docs__/
+[plumber] DATABASE_URL détectée => .env ignoré (Railway).
+Running plumber API at http://127.0.0.1:8000
+Running plumber API at http://127.0.0.1:8000
+Running swagger Docs at http://127.0.0.1:8000/__docs__/
