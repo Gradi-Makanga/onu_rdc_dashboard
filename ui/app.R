@@ -350,6 +350,41 @@ server <- function(input, output, session){
   app_state <- reactiveValues(mode = "home", odd = NULL)
   ind_cat   <- reactiveVal(tibble(indicator_code=character(0), indicator_name=character(0)))
 
+  # ===== Cache shapefile (read/transform/valid ONCE) =====
+shp_cached <- reactiveVal(NULL)
+
+get_shp_adm2 <- function(){
+  g0 <- shp_cached()
+  if (!is.null(g0) && inherits(g0, "sf")) return(g0)
+
+  shp_dir  <- normalizePath(file.path(getwd(), "www"), winslash = "/")
+  shp_path <- file.path(shp_dir, "gadm41_COD_2.shp")
+  if (!file.exists(shp_path)) shp_path <- file.path(shp_dir, "gadm41_COD_2.gpkg")
+
+  g <- tryCatch(sf::st_read(shp_path, quiet = TRUE), error = function(e) NULL)
+  if (is.null(g) || !inherits(g, "sf")) return(NULL)
+
+  g <- tryCatch(sf::st_transform(g, 4326), error = function(e) g)
+  g <- sf::st_make_valid(g)
+
+  # precompute join_key + label_name ONCE
+  g$join_key <- if ("NAME_2" %in% names(g)) g$NAME_2 else NA_character_
+  if ("VARNAME_2" %in% names(g)) {
+    g$join_key <- ifelse(is.na(g$join_key) | !nzchar(g$join_key), g$VARNAME_2, g$join_key)
+  }
+  g$join_key   <- toupper(stringi::stri_trans_general(g$join_key, "Latin-ASCII"))
+  g$label_name <- if ("NAME_2" %in% names(g)) g$NAME_2 else g$join_key
+
+  # centroid points ONCE (gain fort)
+  cent <- sf::st_point_on_surface(g)
+  cent_xy <- sf::st_coordinates(cent)
+  g$cent_lng <- cent_xy[,1]
+  g$cent_lat <- cent_xy[,2]
+
+  shp_cached(g)
+  g
+}
+
   code_filter <- reactive({
     mode <- app_state$mode
     odd  <- app_state$odd
@@ -989,141 +1024,123 @@ output$plotly <- renderPlotly({
 
   # ========= CARTE =========
   output$map <- renderLeaflet({
-    dat <- data_rx()
+  rdc_bounds <- list(w = 12, s = -14, e = 32, n = 6)
+  center_lng <- 23.5; center_lat <- -2.5
 
-    rdc_bounds <- list(w = 12, s = -14, e = 32, n = 6)
-    center_lng <- 23.5; center_lat <- -2.5
+  g <- get_shp_adm2()
+  m <- leaflet(options = leafletOptions(zoomControl = TRUE, minZoom = 4, maxZoom = 9)) |>
+    setView(lng = center_lng, lat = center_lat, zoom = 6) |>
+    setMaxBounds(rdc_bounds$w, rdc_bounds$s, rdc_bounds$e, rdc_bounds$n)
 
-    shp_dir  <- normalizePath(file.path(getwd(), "www"), winslash = "/")
-    shp_path <- file.path(shp_dir, "gadm41_COD_2.shp")
-    if (!file.exists(shp_path)) shp_path <- file.path(shp_dir, "gadm41_COD_2.gpkg")
+  if (is.null(g)) {
+    return(m |> addControl("Shapefile introuvable : placer gadm41_COD_2.* dans ui/www",
+                           position = "bottomleft"))
+  }
 
-    g <- tryCatch(sf::st_read(shp_path, quiet = TRUE), error = function(e) NULL)
-    if (is.null(g) || !inherits(g, "sf")) {
-      return(leaflet(options = leafletOptions(zoomControl = TRUE)) |>
-               setView(center_lng, center_lat, 6) |>
-               addControl("Shapefile introuvable : placer gadm41_COD_2.* dans ui/www",
-                          position = "bottomleft"))
-    }
-    g <- tryCatch(sf::st_transform(g, 4326), error = function(e) g)
-    g <- sf::st_make_valid(g)
+  # Bordures UNE fois (base layer)
+  m |>
+    addPolygons(data = g, fillOpacity = 0, color = "#000000", weight = 1, group = "adm2_base")
+})
 
-    g$join_key <- if ("NAME_2" %in% names(g)) g$NAME_2 else NA_character_
-    if ("VARNAME_2" %in% names(g)) {
-      g$join_key <- ifelse(is.na(g$join_key) | !nzchar(g$join_key), g$VARNAME_2, g$join_key)
-    }
-    g$join_key   <- toupper(stringi::stri_trans_general(g$join_key, "Latin-ASCII"))
-    g$label_name <- if ("NAME_2" %in% names(g)) g$NAME_2 else g$join_key
+observe({
+  dat <- data_rx()
+  g <- get_shp_adm2()
+  if (is.null(g)) return()
 
-    m <- leaflet(options = leafletOptions(zoomControl = TRUE, minZoom = 4, maxZoom = 9)) |>
-      setView(lng = center_lng, lat = center_lat, zoom = 6) |>
-      setMaxBounds(rdc_bounds$w, rdc_bounds$s, rdc_bounds$e, rdc_bounds$n)
+  # si pas de data -> nettoyer les couches thématiques
+  if (!is.data.frame(dat) || !nrow(dat)) {
+    leafletProxy("map") |>
+      clearGroup("fill") |>
+      clearGroup("labels") |>
+      clearControls()
+    return()
+  }
 
-    m <- m |>
-      addPolygons(data = g, fillOpacity = 0, color = "#000000", weight = 1)
+  yrs_all <- sort(unique(as.integer(dat$period[!is.na(dat$ref_area) & dat$ref_area != "COD"])))
+  if (!length(yrs_all)) {
+    leafletProxy("map") |>
+      clearGroup("fill") |>
+      clearGroup("labels") |>
+      clearControls() |>
+      addControl("Aucune zone détectée pour cet indicateur.", position = "bottomleft")
+    return()
+  }
 
-    if (!is.data.frame(dat) || !nrow(dat)) {
-      return(m |> addControl("Aucune zone détectée pour cet indicateur.", position = "bottomleft"))
-    }
+  sel_year <- if (!is.null(input$map_year)) as.integer(input$map_year) else max(yrs_all)
 
-    yrs_all <- sort(unique(as.integer(dat$period[!is.na(dat$ref_area) & dat$ref_area != "COD"])))
-    if (!length(yrs_all)) {
-      return(m |> addControl("Aucune zone détectée pour cet indicateur.", position = "bottomleft"))
-    }
-    sel_year <- if (!is.null(input$map_year)) as.integer(input$map_year) else max(yrs_all)
+  dat2 <- dat |>
+    dplyr::filter(!is.na(ref_area), ref_area != "COD", as.integer(period) == sel_year) |>
+    dplyr::mutate(
+      ref_area = toupper(stringi::stri_trans_general(ref_area, "Latin-ASCII")),
+      value    = suppressWarnings(as.numeric(value)),
+      modality = dplyr::coalesce(as.character(obs_status), NA_character_)
+    ) |>
+    dplyr::transmute(join_key = ref_area, value, modality, year = sel_year)
 
-    dat2 <- dat |>
-      dplyr::filter(!is.na(ref_area), ref_area != "COD", as.integer(period) == sel_year) |>
-      dplyr::mutate(
-        ref_area = toupper(stringi::stri_trans_general(ref_area, "Latin-ASCII")),
-        value    = suppressWarnings(as.numeric(value)),
-        modality = dplyr::coalesce(as.character(obs_status), NA_character_)
-      ) |>
-      dplyr::transmute(
-        join_key = ref_area,
-        value, modality, year = sel_year
-      )
+  if (!nrow(dat2)) {
+    leafletProxy("map") |>
+      clearGroup("fill") |>
+      clearGroup("labels") |>
+      clearControls() |>
+      addControl("Aucune zone détectée pour cet indicicateur.", position = "bottomleft")
+    return()
+  }
 
-    if (!nrow(dat2)) {
-      return(m |> addControl("Aucune zone détectée pour cet indicicateur.", position = "bottomleft"))
-    }
+  gj <- dplyr::left_join(g, dat2, by = "join_key")
+  gj_on <- gj[!is.na(gj$value) & !sf::st_is_empty(gj), ]
+  if (!nrow(gj_on)) {
+    leafletProxy("map") |>
+      clearGroup("fill") |>
+      clearGroup("labels") |>
+      clearControls() |>
+      addControl("Aucune zone détectée pour cet indicateur.", position = "bottomleft")
+    return()
+  }
 
-    gj <- dplyr::left_join(g, dat2, by = "join_key")
-    gj_on <- gj[!is.na(gj$value) & !sf::st_is_empty(gj), ]
-    if (!nrow(gj_on)) {
-      return(m |> addControl("Aucune zone détectée pour cet indicateur.", position = "bottomleft"))
-    }
+  pal <- colorNumeric("Blues", domain = gj_on$value, na.color = "transparent")
 
-    pal <- colorNumeric("Blues", domain = gj_on$value, na.color = "transparent")
+  leafletProxy("map") |>
+    clearGroup("fill") |>
+    clearGroup("labels") |>
+    clearControls() |>
 
-m <- m |>
-  addPolygons(
-    data = gj_on,
-    fillColor = ~pal(value), fillOpacity = 0.75,
-    color = "#000000", weight = 1, opacity = 1,
-    highlight = highlightOptions(weight = 2, color = "#000000", bringToFront = TRUE),
+    addPolygons(
+      data = gj_on,
+      fillColor = ~pal(value), fillOpacity = 0.75,
+      color = "#000000", weight = 1, opacity = 1,
+      highlight = highlightOptions(weight = 2, color = "#000000", bringToFront = TRUE),
+      label = ~paste0(label_name, " : ", formatC(value, format = "f", digits = 2)),
+      labelOptions = labelOptions(direction = "auto", opacity = 0.9),
+      popup = ~htmltools::HTML(paste0(
+        "<b>Région :</b> ", htmltools::htmlEscape(label_name), "<br/>",
+        ifelse(is.na(modality) | modality %in% c("", "RDC"),
+               "",
+               paste0("<b>Modalité :</b> ", htmltools::htmlEscape(modality), "<br/>")),
+        "<b>Année :</b> ", year, "<br/>",
+        "<b>Valeur :</b> ", formatC(value, format = "f", digits = 2)
+      )),
+      group = "fill"
+    ) |>
 
-    # ✅ au survol (PC) / au toucher (mobile parfois)
-    label = ~paste0(label_name, " : ", formatC(value, format = "f", digits = 2)),
-    labelOptions = labelOptions(direction = "auto", opacity = 0.9),
-
-    # ✅ au clic/tap : popup détaillé
-    popup = ~htmltools::HTML(paste0(
-      "<b>Région :</b> ", htmltools::htmlEscape(label_name), "<br/>",
-      ifelse(is.na(modality) | modality %in% c("", "RDC"),
-             "",
-             paste0("<b>Modalité :</b> ", htmltools::htmlEscape(modality), "<br/>")),
-      "<b>Année :</b> ", year, "<br/>",
-      "<b>Valeur :</b> ", formatC(value, format = "f", digits = 2)
-    ))
-  )
-
-
-    cent <- sf::st_point_on_surface(gj_on)
-    cent_xy <- sf::st_coordinates(cent)
-    m <- m |>
-      addLabelOnlyMarkers(
-        lng = cent_xy[,1], lat = cent_xy[,2], label = gj_on$label_name,
-        labelOptions = labelOptions(
-          noHide = TRUE, direction = "center", textOnly = TRUE,
-          style = list(
-            "color" = "#0b234a", "font-weight" = "700",
-            "font-size" = "12px", "text-shadow" = "0 0 6px rgba(255,255,255,.9)"
-          )
+    addLabelOnlyMarkers(
+      lng = gj_on$cent_lng, lat = gj_on$cent_lat, label = gj_on$label_name,
+      labelOptions = labelOptions(
+        noHide = TRUE, direction = "center", textOnly = TRUE,
+        style = list(
+          "color" = "#0b234a", "font-weight" = "700",
+          "font-size" = "12px", "text-shadow" = "0 0 6px rgba(255,255,255,.9)"
         )
-      )
+      ),
+      group = "labels"
+    ) |>
 
-    m <- m |>
-      addLegend(
-        position = "bottomright",
-        pal = pal, values = gj_on$value,
-        title = paste0("Valeur (", sel_year, ")"),
-        opacity = 0.75, labFormat = labelFormat(digits = 2)
-      )
-
-  #  leg_rows <- sprintf(
-  #    "<li><b>%s</b>%s : %s (%s)</li>",
-  #   htmlEscape(gj_on$label_name),
-  #   ifelse(is.na(gj_on$modality) | gj_on$modality %in% c("", "RDC"),
-  #          "", paste0(" — ", htmlEscape(gj_on$modality))),
-  #   ifelse(is.finite(gj_on$value), formatC(gj_on$value, format = "f", digits = 2), "NA"),
-  #   sel_year
-  # )
-  # legend_html <- HTML(paste0(
-  #   "<div style='background:#ffffffcc;padding:8px 10px;border:1px solid #c7d3e6;border-radius:8px;max-height:180px;overflow:auto;'>",
-  #   "<div style='font-weight:700;margin-bottom:6px;'>Zones & modalités</div>",
-  #   "<ul style='padding-left:18px;margin:0;'>", paste(leg_rows, collapse = ""), "</ul>",
-  #   "</div>"
-  # ))
-  # m <- m |> addControl(legend_html, position = "bottomleft")
-
-    bb <- sf::st_bbox(g)
-    if (all(is.finite(bb))) {
-      bx <- unname(as.numeric(bb[c("xmin","ymin","xmax","ymax")]))
-      m  <- m |> fitBounds(bx[1], bx[2], bx[3], bx[4])
-    }
-    m
-  })
+    addLegend(
+      position = "bottomright",
+      pal = pal, values = gj_on$value,
+      title = paste0("Valeur (", sel_year, ")"),
+      opacity = 0.75, labFormat = labelFormat(digits = 2)
+    )
+}) 
  
   output$dl_map <- downloadHandler(
     filename = function(){
