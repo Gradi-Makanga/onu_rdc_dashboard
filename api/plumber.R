@@ -416,3 +416,18 @@ function(){
     "onu_api_rows_total ", n, "\n"
   )
 }
+
+
+#* Dernière mise à jour de la base (staging)
+#* @get /last_update
+function(){
+  con <- pg_con()
+  on.exit(try(DBI::dbDisconnect(con), silent = TRUE), add = TRUE)
+
+  res <- DBI::dbGetQuery(con, "
+    SELECT to_char(MAX(load_ts), 'YYYY-MM-DD HH24:MI:SS') AS last_update
+    FROM indicator_values_staging
+  ")
+
+  list(last_update = res$last_update[1])
+}

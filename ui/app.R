@@ -309,8 +309,12 @@ table.dataTable tbody tr:hover { background-color: #eaf2ff !important; }
       ),
       div(class="title-right",
           img(src = "odd.jpg",   alt = "ODD"),
-          img(src = "socio.png", alt = "Socioéconomique")
-      )
+          img(src = "socio.png", alt = "Socioéconomique"),
+          tags$div(
+             style="margin-left:16px; text-align:right; font-size:12px; line-height:1.2;",
+             tags$span(textOutput("last_update_txt"), style="color:#ffffff; font-weight:600;")
+           )
+       )
   ),
 
   uiOutput("body_ui")
@@ -371,6 +375,17 @@ server <- function(input, output, session){
         app_state$odd  <- odd_id
       }, ignoreInit = TRUE)
     })
+
+# --- Dernière mise à jour (via API) ---
+output$last_update_txt <- renderText({
+  # Appelle l'API (à créer) qui renvoie la date max(load_ts)
+  obj <- try(api_get_json("/last_update"), silent = TRUE)
+  if (inherits(obj, "try-error") || is.null(obj$last_update) || !nzchar(obj$last_update)) {
+    return("Dernière mise à jour : inconnue")
+  }
+  paste0("Dernière mise à jour : ", obj$last_update)
+})
+
   }
 
   output$body_ui <- renderUI({
