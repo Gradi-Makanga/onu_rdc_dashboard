@@ -27,6 +27,7 @@ RUN install.r \
     plotly \
     RPostgres \
     targets \
+    shinycssloaders \
     dotenv 
 
 WORKDIR /app

@@ -17,6 +17,7 @@ RUN install.r \
     httr2 \
     dplyr \
     readr \
+    shinycssloaders \
     dotenv
 
 WORKDIR /app

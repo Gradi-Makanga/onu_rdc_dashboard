@@ -7,6 +7,7 @@ suppressPackageStartupMessages({
   library(plotly)
   library(stringi)
   library(htmltools)
+  library(shinycssloaders)
 })
 
 API_BASE <- Sys.getenv("ONU_API_BASE", "https://onurdcdashboard-production-4f33.up.railway.app")
@@ -929,13 +930,21 @@ output$last_update_txt <- renderText({
   })
 
   # UI dynamique : plotly pour tendances, ggplot statique pour barres (pour ne PAS bouger les labels)
-  output$plot_ui <- renderUI({
-    if (isTRUE(is_trend_plot())) {
-      plotlyOutput("plotly", height = "460px")
-    } else {
-      plotOutput("plot", height = 460)
-    }
-  })
+output$plot_ui <- renderUI({
+  if (isTRUE(is_trend_plot())) {
+    shinycssloaders::withSpinner(
+      plotlyOutput("plotly", height = "460px"),
+      type = 4,              # cercle
+      color = "#0057b7"      # ton ONU blue
+    )
+  } else {
+    shinycssloaders::withSpinner(
+      plotOutput("plot", height = 460),
+      type = 4,
+      color = "#0057b7"
+    )
+  }
+})
 
 output$plotly <- renderPlotly({
   req(is_trend_plot())
