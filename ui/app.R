@@ -339,7 +339,11 @@ indicator_tabs <- function(){
     tabPanel(
       "Carte",
       uiOutput("map_year_ui"),
-      leafletOutput("map", height=520),
+      shinycssloaders::withSpinner(
+          leafletOutput("map", height=520),
+          type = 4,
+          color = "#0057b7"
+          ),
       tags$small("Zones sous-nationales colorées, valeurs au centroïde.")
     )
   )
