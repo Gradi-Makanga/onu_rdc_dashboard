@@ -352,6 +352,9 @@ indicator_tabs <- function(){
 # ---------- SERVER ----------
 server <- function(input, output, session){
 
+  outputOptions(output, "plotly", suspendWhenHidden = FALSE)
+  outputOptions(output, "plot",   suspendWhenHidden = FALSE)
+
   app_state <- reactiveValues(mode = "home", odd = NULL)
   ind_cat   <- reactiveVal(tibble(indicator_code=character(0), indicator_name=character(0)))
 
