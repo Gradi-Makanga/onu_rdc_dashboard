@@ -936,21 +936,28 @@ output$last_update_txt <- renderText({
 
   # UI dynamique : plotly pour tendances, ggplot statique pour barres (pour ne PAS bouger les labels)
 output$plot_ui <- renderUI({
-  input$go  # <- force une dépendance à "Appliquer"
-  if (isTRUE(is_trend_plot())) {
-    shinycssloaders::withSpinner(
-      plotlyOutput("plotly", height = "460px"),
-      type = 4,              # cercle
-      color = "#0057b7"      # ton ONU blue
+  trend <- isTRUE(is_trend_plot())
+
+  tagList(
+    # Bloc Plotly (tendance)
+    div(
+      style = if (trend) "" else "display:none;",
+      shinycssloaders::withSpinner(
+        plotlyOutput("plotly", height = "460px"),
+        type = 4, color = "#0057b7"
+      )
+    ),
+
+    # Bloc ggplot statique (barres)
+    div(
+      style = if (!trend) "" else "display:none;",
+      shinycssloaders::withSpinner(
+        plotOutput("plot", height = 460),
+        type = 4, color = "#0057b7"
+      )
     )
-  } else {
-    shinycssloaders::withSpinner(
-      plotOutput("plot", height = 460),
-      type = 4,
-      color = "#0057b7"
-    )
-  }
-})
+  )
+})sssss
 
 output$plotly <- renderPlotly({
   req(is_trend_plot())
