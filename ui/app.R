@@ -365,6 +365,10 @@ server <- function(input, output, session){
     } else NULL
   })
 
+  # Empêche Shiny de suspendre les outputs quand ils sont cachés
+  outputOptions(output, "plotly", suspendWhenHidden = FALSE)
+  outputOptions(output, "plot",   suspendWhenHidden = FALSE)
+
   observeEvent(input$home_odd,  { app_state$mode <- "odd_select"; app_state$odd <- NULL })
   observeEvent(input$home_socio,{ app_state$mode <- "socio";      app_state$odd <- NULL })
   observeEvent(input$back_home1,{ app_state$mode <- "home";       app_state$odd <- NULL }, ignoreInit=TRUE)
