@@ -365,9 +365,6 @@ server <- function(input, output, session){
     } else NULL
   })
 
-  # Empêche Shiny de suspendre les outputs quand ils sont cachés
-  outputOptions(output, "plotly", suspendWhenHidden = FALSE)
-  outputOptions(output, "plot",   suspendWhenHidden = FALSE)
 
   observeEvent(input$home_odd,  { app_state$mode <- "odd_select"; app_state$odd <- NULL })
   observeEvent(input$home_socio,{ app_state$mode <- "socio";      app_state$odd <- NULL })
@@ -939,6 +936,7 @@ output$last_update_txt <- renderText({
 
   # UI dynamique : plotly pour tendances, ggplot statique pour barres (pour ne PAS bouger les labels)
 output$plot_ui <- renderUI({
+  input$go  # <- force une dépendance à "Appliquer"
   if (isTRUE(is_trend_plot())) {
     shinycssloaders::withSpinner(
       plotlyOutput("plotly", height = "460px"),
