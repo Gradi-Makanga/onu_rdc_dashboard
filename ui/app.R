@@ -352,9 +352,6 @@ indicator_tabs <- function(){
 # ---------- SERVER ----------
 server <- function(input, output, session){
 
-  outputOptions(output, "plotly", suspendWhenHidden = FALSE)
-  outputOptions(output, "plot",   suspendWhenHidden = FALSE)
-
   app_state <- reactiveValues(mode = "home", odd = NULL)
   ind_cat   <- reactiveVal(tibble(indicator_code=character(0), indicator_name=character(0)))
 
@@ -367,7 +364,6 @@ server <- function(input, output, session){
       SOCIO_CODES
     } else NULL
   })
-
 
   observeEvent(input$home_odd,  { app_state$mode <- "odd_select"; app_state$odd <- NULL })
   observeEvent(input$home_socio,{ app_state$mode <- "socio";      app_state$odd <- NULL })
@@ -939,27 +935,19 @@ output$last_update_txt <- renderText({
 
   # UI dynamique : plotly pour tendances, ggplot statique pour barres (pour ne PAS bouger les labels)
 output$plot_ui <- renderUI({
-  trend <- isTRUE(is_trend_plot())
-
-  tagList(
-    # Bloc Plotly (tendance)
-    div(
-      style = if (trend) "" else "display:none;",
-      shinycssloaders::withSpinner(
-        plotlyOutput("plotly", height = "460px"),
-        type = 4, color = "#0057b7"
-      )
-    ),
-
-    # Bloc ggplot statique (barres)
-    div(
-      style = if (!trend) "" else "display:none;",
-      shinycssloaders::withSpinner(
-        plotOutput("plot", height = 460),
-        type = 4, color = "#0057b7"
-      )
+  if (isTRUE(is_trend_plot())) {
+    shinycssloaders::withSpinner(
+      plotlyOutput("plotly", height = "460px"),
+      type = 4,              # cercle
+      color = "#0057b7"      # ton ONU blue
     )
-  )
+  } else {
+    shinycssloaders::withSpinner(
+      plotOutput("plot", height = 460),
+      type = 4,
+      color = "#0057b7"
+    )
+  }
 })
 
 output$plotly <- renderPlotly({
@@ -1252,3 +1240,4 @@ m <- m |>
 }
 
 shinyApp(ui, server)
+
