@@ -957,7 +957,7 @@ output$plot_ui <- renderUI({
       )
     )
   )
-})sssss
+})
 
 output$plotly <- renderPlotly({
   req(is_trend_plot())
